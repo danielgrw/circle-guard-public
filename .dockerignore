@@ -1,0 +1,8 @@
+.git
+**/build/
+**/.gradle/
+**/.idea/
+**/*.iml
+mobile/node_modules/
+mobile/.expo/
+scratch/

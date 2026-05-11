@@ -1,0 +1,13 @@
+replicaCount: 1
+
+image:
+  repository: circleguard-auth-service
+  tag: "changeme"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8180
+
+env: dev
+resources: {}

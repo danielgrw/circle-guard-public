@@ -1,0 +1,50 @@
+# CI/CD infrastructure for the Circle Guard project.
+# Run AFTER docker-compose.dev.yml (which handles Postgres, Neo4j, Kafka, Redis, OpenLDAP).
+#
+# Usage:
+#   docker compose -f docker-compose.jenkins.yml up -d
+#
+# Jenkins UI: http://localhost:8080
+# Initial admin password: docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+
+services:
+  jenkins:
+    image: jenkins/jenkins:lts-jdk21
+    container_name: jenkins
+    restart: unless-stopped
+    user: root                     # Required to access the Docker socket
+    ports:
+      - "8080:8080"                # Jenkins web UI
+      - "50000:50000"              # Jenkins inbound agent port (JNLP)
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock   # Docker socket mount for DooD
+    environment:
+      - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
+    networks:
+      - ci-net
+
+  # Optional local Docker registry — avoids Docker Hub rate limits.
+  # Push from host:      localhost:5000/{service-name}:{git-short-sha}
+  # Push from Jenkins:   docker-registry:5000/{service-name}:{git-short-sha}  ← use this in Jenkinsfile/Shared Library
+  registry:
+    image: registry:2
+    container_name: docker-registry
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - registry_data:/var/lib/registry
+    networks:
+      - ci-net
+
+volumes:
+  jenkins_home:
+    name: circleguard_jenkins_home
+  registry_data:
+    name: circleguard_registry_data
+
+networks:
+  ci-net:
+    name: circleguard-ci
+    driver: bridge

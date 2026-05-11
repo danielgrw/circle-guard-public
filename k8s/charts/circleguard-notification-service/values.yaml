@@ -1,0 +1,13 @@
+replicaCount: 1
+
+image:
+  repository: circleguard-notification-service
+  tag: "changeme"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8082
+
+env: dev
+resources: {}

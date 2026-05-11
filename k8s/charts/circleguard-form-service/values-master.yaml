@@ -1,0 +1,8 @@
+# Stub — fully defined in Story 4.1 (includes RollingUpdate strategy + HPA for promotion-service)
+image:
+  repository: docker-registry:5000/circleguard-form-service
+  tag: "master"
+  pullPolicy: IfNotPresent
+
+env: master
+replicaCount: 2

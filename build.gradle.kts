@@ -45,5 +45,15 @@ subprojects {
 
     tasks.withType<Test> {
         useJUnitPlatform()
+        // Ensure Testcontainers can connect to the local Docker daemon.
+        // Docker 20.10+ dropped support for API versions below 1.40;
+        // setting this env var tells docker-java to negotiate a compatible version.
+        environment("DOCKER_HOST", System.getenv("DOCKER_HOST") ?: "unix:///var/run/docker.sock")
+        environment("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE", "/var/run/docker.sock")
+        // Docker 20.10+ requires API version >= 1.40.
+        // Testcontainers' shaded docker-java reads api.version via system property or env.
+        // System properties override env vars in docker-java's config resolution chain.
+        environment("API_VERSION", "1.41")
+        systemProperty("api.version", "1.41")
     }
 }

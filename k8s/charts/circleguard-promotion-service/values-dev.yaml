@@ -1,0 +1,10 @@
+image:
+  repository: docker-registry:5000/circleguard-promotion-service
+  tag: "dev"
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8088
+
+env: dev
+replicaCount: 1

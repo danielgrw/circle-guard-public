@@ -1,0 +1,10 @@
+image:
+  repository: docker-registry:5000/circleguard-gateway-service
+  tag: "dev"
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8087
+
+env: dev
+replicaCount: 1

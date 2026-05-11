@@ -1,0 +1,13 @@
+replicaCount: 1
+
+image:
+  repository: circleguard-identity-service
+  tag: "changeme"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8083
+
+env: dev
+resources: {}

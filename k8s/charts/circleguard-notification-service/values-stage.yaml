@@ -1,0 +1,8 @@
+# Stub — fully defined in Story 3.1
+image:
+  repository: docker-registry:5000/circleguard-notification-service
+  tag: "stage"
+  pullPolicy: IfNotPresent
+
+env: stage
+replicaCount: 1

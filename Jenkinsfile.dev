@@ -1,0 +1,125 @@
+/**
+ * Jenkinsfile.dev — CircleGuard Dev Pipeline
+ *
+ * Thin orchestrator that calls the Jenkins Shared Library steps in jenkins/vars/.
+ * All pipeline logic lives in the vars/ functions — this file is intentionally minimal.
+ *
+ * Stage order (AC-1.5.1):
+ *   Build & Docker Push → Unit Tests → Integration Tests → Deploy to Dev → E2E Smoke Tests
+ *
+ * Shared library (jenkins/vars/) must be registered in Jenkins → Global Pipeline Libraries
+ * with name 'circleguard-shared-library' pointing to circle-guard-public/jenkins/.
+ *
+ * Pre-requisites (Jenkins admin one-time setup):
+ *   1. Global Pipeline Libraries: name=circleguard-shared-library, path=circle-guard-public/jenkins/
+ *   2. Global Environment Variables: DEV_BASE_URL=<gateway accessible URL>
+ *      e.g. http://<k8s-node-ip>:<nodeport> or cluster-internal DNS if agent runs in-cluster
+ */
+@Library('circleguard-shared-library') _
+
+pipeline {
+    agent any
+
+    environment {
+        DEV_NAMESPACE = 'circleguard-dev'
+        ENV_LABEL     = 'dev'
+    }
+
+    stages {
+        stage('Build & Docker Push') {
+            steps {
+                script {
+                    // All 6 services share the same git HEAD → same SHA.
+                    // Capture from first call; store in env so Deploy stage can access it.
+                    def gitSha = buildAndPush('circleguard-gateway-service')
+                    buildAndPush('circleguard-auth-service')
+                    buildAndPush('circleguard-identity-service')
+                    buildAndPush('circleguard-form-service')
+                    buildAndPush('circleguard-promotion-service')
+                    buildAndPush('circleguard-notification-service')
+                    env.GIT_SHA = gitSha
+                }
+            }
+        }
+
+        stage('Unit Tests') {
+            steps {
+                script {
+                    // runUnitTests() runs ./gradlew :services:{svc}:test and publishes
+                    // JUnit XML in a try/finally — reports are always published even on failure.
+                    runUnitTests('circleguard-gateway-service')
+                    runUnitTests('circleguard-auth-service')
+                    runUnitTests('circleguard-identity-service')
+                    runUnitTests('circleguard-form-service')
+                    runUnitTests('circleguard-promotion-service')
+                    runUnitTests('circleguard-notification-service')
+                }
+            }
+        }
+
+        stage('Integration Tests') {
+            steps {
+                script {
+                    // runIntegrationTests() sets TESTCONTAINERS_REUSE_ENABLE=false and
+                    // runs ./gradlew :services:{svc}:integrationTest.
+                    // NOTE: integrationTest source sets are added in Story 2.2.
+                    // Until then this stage will fail — expected, acceptable behaviour.
+                    runIntegrationTests('circleguard-gateway-service')
+                    runIntegrationTests('circleguard-auth-service')
+                    runIntegrationTests('circleguard-identity-service')
+                    runIntegrationTests('circleguard-form-service')
+                    runIntegrationTests('circleguard-promotion-service')
+                    runIntegrationTests('circleguard-notification-service')
+                }
+            }
+        }
+
+        stage('Deploy to Dev') {
+            steps {
+                script {
+                    // deployToNamespace(serviceName, envLabel, namespace, gitSha)
+                    // - Creates namespace idempotently via kubectl --dry-run
+                    // - Runs helm upgrade --install --atomic --timeout 3m
+                    // - env.ENV_LABEL and env.DEV_NAMESPACE used (not bare names) for
+                    //   reliable resolution inside script{} blocks in Declarative Pipeline
+                    //
+                    // Deploy order — gateway leads intentionally. The gateway's readiness
+                    // probe hits /actuator/health on its own port (8087); it does NOT reach
+                    // out to auth-service at startup. JWT validation uses a symmetric shared
+                    // secret (no JWKS fetch from auth-service). This order is safe today.
+                    // If JWKS / upstream health indicators are ever added to the gateway,
+                    // reorder to: auth → identity → gateway → form → promotion → notification.
+                    deployToNamespace('circleguard-gateway-service',      env.ENV_LABEL, env.DEV_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-auth-service',         env.ENV_LABEL, env.DEV_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-identity-service',     env.ENV_LABEL, env.DEV_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-form-service',         env.ENV_LABEL, env.DEV_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-promotion-service',    env.ENV_LABEL, env.DEV_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-notification-service', env.ENV_LABEL, env.DEV_NAMESPACE, env.GIT_SHA)
+                }
+            }
+        }
+
+        stage('E2E Smoke Tests') {
+            steps {
+                script {
+                    // STUB — full Playwright implementation delivered in Story 3.2.
+                    // Reads env.DEV_BASE_URL; fails fast if not configured in Jenkins
+                    // global environment variables (fail loudly vs silently passing).
+                    runE2ETests()
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            // Pipeline-level aggregator: produces consolidated trend graph and top-level
+            // build badge in Jenkins (AC-1.5.2). Per-step publishers inside runUnitTests /
+            // runIntegrationTests already guarantee per-service reports; this is the
+            // belt-and-suspenders pipeline summary. allowEmptyResults keeps the build green
+            // until integration-test source sets are wired in Story 2.2.
+            junit allowEmptyResults: true, testResults: '**/build/test-results/**/*.xml'
+            echo "=== Jenkinsfile.dev pipeline complete — result: ${currentBuild.result ?: 'SUCCESS'} ==="
+        }
+    }
+}

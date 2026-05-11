@@ -24,3 +24,5 @@ dependencies {
     testImplementation("org.springframework.kafka:spring-kafka-test")
     testImplementation("org.springframework.security:spring-security-test")
 }
+
+tasks.jar { enabled = false }

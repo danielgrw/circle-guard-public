@@ -1,0 +1,13 @@
+replicaCount: 1
+
+image:
+  repository: circleguard-form-service
+  tag: "changeme"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8086
+
+env: dev
+resources: {}

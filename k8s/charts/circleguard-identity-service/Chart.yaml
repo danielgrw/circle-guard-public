@@ -1,0 +1,6 @@
+apiVersion: v2
+name: circleguard-identity-service
+description: Helm chart for Circle Guard identity-service
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

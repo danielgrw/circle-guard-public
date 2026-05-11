@@ -1,0 +1,10 @@
+image:
+  repository: docker-registry:5000/circleguard-notification-service
+  tag: "dev"
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8082
+
+env: dev
+replicaCount: 1

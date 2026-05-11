@@ -1,0 +1,9 @@
+FROM eclipse-temurin:21-jre-alpine
+
+LABEL maintainer="circleguard-team"
+
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+WORKDIR /app
+
+USER appuser

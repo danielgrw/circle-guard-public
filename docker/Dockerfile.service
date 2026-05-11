@@ -1,0 +1,27 @@
+# Template / reference — not used directly by CI.
+# Each service has its own Dockerfile under services/{service-name}/Dockerfile.
+# Build context must be the repo root (circle-guard-public/), not the service directory:
+#
+#   docker build \
+#     -t {service-name}:$(git rev-parse --short HEAD) \
+#     -f services/{service-name}/Dockerfile \
+#     .
+#
+# ARGs:
+#   SERVICE_NAME  — Gradle subproject path segment, e.g. circleguard-auth-service
+#   SERVICE_PORT  — Port the Spring Boot app listens on
+
+# Stage 1: Build
+FROM gradle:8-jdk21 AS builder
+WORKDIR /workspace
+COPY . .
+ARG SERVICE_NAME
+RUN ./gradlew :services:${SERVICE_NAME}:bootJar -x test --no-daemon
+
+# Stage 2: Final image — inherits shared JRE base, no JDK toolchain in final layer
+FROM localhost:5000/circleguard-base:jdk21-alpine
+ARG SERVICE_NAME
+ARG SERVICE_PORT=8080
+COPY --from=builder --chown=appuser:appgroup /workspace/services/${SERVICE_NAME}/build/libs/*.jar /app/app.jar
+EXPOSE ${SERVICE_PORT}
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

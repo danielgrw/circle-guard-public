@@ -12,3 +12,7 @@ spring:
     authentication:
       username: neo4j
       password: password
+  kafka:
+    bootstrap-servers: localhost:29092
+    consumer:
+      auto-offset-reset: earliest
