@@ -5,11 +5,15 @@
 #   docker compose -f docker-compose.jenkins.yml up -d
 #
 # Jenkins UI: http://localhost:8080
-# Initial admin password: docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+# Configuration: copy .env.jenkins.example → .env.jenkins and set CIRCLEGUARD_GIT_URL (see docs/bootstrap/README.md).
+# Admin user: admin / password from JENKINS_ADMIN_PASSWORD in .env.jenkins (wizard disabled; CasC applies config).
 
 services:
   jenkins:
-    image: jenkins/jenkins:lts-jdk21
+    build:
+      context: .
+      dockerfile: jenkins/docker/Dockerfile
+    image: circleguard/jenkins:local
     container_name: jenkins
     restart: unless-stopped
     user: root                     # Required to access the Docker socket
@@ -19,8 +23,8 @@ services:
     volumes:
       - jenkins_home:/var/jenkins_home
       - /var/run/docker.sock:/var/run/docker.sock   # Docker socket mount for DooD
-    environment:
-      - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
+    env_file:
+      - .env.jenkins
     networks:
       - ci-net
 
