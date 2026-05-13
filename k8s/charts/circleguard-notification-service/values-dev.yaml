@@ -1,5 +1,5 @@
 image:
-  repository: docker-registry:5000/circleguard-notification-service
+  repository: localhost:5000/circleguard-notification-service
   tag: "dev"
   pullPolicy: IfNotPresent
 

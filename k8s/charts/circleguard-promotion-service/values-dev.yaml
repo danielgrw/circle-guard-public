@@ -1,5 +1,5 @@
 image:
-  repository: docker-registry:5000/circleguard-promotion-service
+  repository: localhost:5000/circleguard-promotion-service
   tag: "dev"
   pullPolicy: IfNotPresent
 

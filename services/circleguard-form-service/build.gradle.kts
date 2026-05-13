@@ -16,6 +16,7 @@ dependencies {
     implementation("org.flywaydb:flyway-core")
     runtimeOnly("org.postgresql:postgresql")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation(project(":test-support"))
 }
 
 tasks.jar { enabled = false }

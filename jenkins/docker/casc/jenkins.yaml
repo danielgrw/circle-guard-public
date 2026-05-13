@@ -7,6 +7,8 @@
 # Optional:
 #   JENKINS_ADMIN_PASSWORD — default changeme
 #   DEV_BASE_URL           — gateway URL for E2E stub (default http://127.0.0.1:8087)
+#   DOCKER_BIN             — full path to docker CLI (CasC default /usr/bin/docker if unset)
+#   CI_REGISTRY_HOST       — host:port for image tag/push (default localhost:5000 for DooD + kind)
 #   CIRCLEGUARD_GIT_BRANCH — branch spec for the seeded Pipeline job (default */main)
 
 jenkins:
@@ -28,6 +30,11 @@ jenkins:
         env:
           - key: DEV_BASE_URL
             value: "${DEV_BASE_URL:-http://127.0.0.1:8087}"
+          # Used by buildAndPush.groovy when bare `docker` is not on PATH (controller remoting).
+          - key: DOCKER_BIN
+            value: "${DOCKER_BIN:-/usr/bin/docker}"
+          - key: CI_REGISTRY_HOST
+            value: "${CI_REGISTRY_HOST:-localhost:5000}"
 
 unclassified:
   globalLibraries:

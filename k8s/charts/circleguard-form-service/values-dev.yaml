@@ -1,5 +1,5 @@
 image:
-  repository: docker-registry:5000/circleguard-form-service
+  repository: localhost:5000/circleguard-form-service
   tag: "dev"
   pullPolicy: IfNotPresent
 

@@ -29,8 +29,8 @@ services:
       - ci-net
 
   # Optional local Docker registry — avoids Docker Hub rate limits.
-  # Push from host:      localhost:5000/{service-name}:{git-short-sha}
-  # Push from Jenkins:   docker-registry:5000/{service-name}:{git-short-sha}  ← use this in Jenkinsfile/Shared Library
+  # Push / image refs (DooD: host daemon → use host-reachable host:port, default localhost:5000)
+  # Shared library: CI_REGISTRY_HOST (CasC default localhost:5000). kind dev charts use the same.
   registry:
     image: registry:2
     container_name: docker-registry
