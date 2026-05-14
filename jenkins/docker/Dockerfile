@@ -8,6 +8,8 @@
 FROM jenkins/jenkins:lts-jdk21
 
 ARG DOCKER_CLI_VERSION=27.4.1
+ARG KUBECTL_VERSION=v1.36.1
+ARG HELM_VERSION=v3.17.3
 
 USER root
 RUN apt-get update \
@@ -23,7 +25,19 @@ RUN apt-get update \
        | tar -xz -C /tmp \
   && install -m 755 /tmp/docker/docker /usr/bin/docker \
   && rm -rf /tmp/docker \
-  && /usr/bin/docker --version
+  && /usr/bin/docker --version \
+  # --- kubectl ---
+  && curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${DOCKER_ARCH/x86_64/amd64}/kubectl" \
+       -o /usr/local/bin/kubectl \
+  && chmod 755 /usr/local/bin/kubectl \
+  && /usr/local/bin/kubectl version --client \
+  # --- helm ---
+  && HELM_ARCH="$(dpkg --print-architecture)" \
+  && curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${HELM_ARCH}.tar.gz" \
+       | tar -xz -C /tmp \
+  && install -m 755 /tmp/linux-${HELM_ARCH}/helm /usr/local/bin/helm \
+  && rm -rf /tmp/linux-${HELM_ARCH} \
+  && /usr/local/bin/helm version
 
 USER jenkins
 

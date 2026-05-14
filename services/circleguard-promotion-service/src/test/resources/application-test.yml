@@ -12,7 +12,8 @@ spring:
     authentication:
       username: neo4j
       password: password
-  kafka:
-    bootstrap-servers: localhost:29092
-    consumer:
-      auto-offset-reset: earliest
+  # No kafka stanza here — unit tests mock KafkaTemplate with plain Mockito.
+  # Real Kafka wiring happens only in src/integrationTest via Testcontainers.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
