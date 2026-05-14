@@ -8,7 +8,7 @@
  * Integration tests live under src/integrationTest/java/ and start real
  * Testcontainers (Kafka → Neo4j → Postgres → Redis order as applicable).
  *
- * JUnit XML output: services/{serviceName}/build/test-results/integrationTest/**/*.xml
+ * JUnit XML output: services/{serviceName}/build/test-results/integrationTest/ ... /*.xml
  *
  * On non-zero Gradle exit: publishes reports then error("Tests failed").
  *

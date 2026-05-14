@@ -5,7 +5,7 @@
  * results (even when tests fail), satisfying AC-1.4.4.
  *
  * Unit tests live under src/test/java/ and do NOT spin up containers.
- * JUnit XML output: services/{serviceName}/build/test-results/test/**/*.xml
+ * JUnit XML output: services/{serviceName}/build/test-results/test/ ... /*.xml
  *
  * The glob is scoped to the unit-test Gradle task name to avoid mixing integration
  * results and to surface separate checks in Jenkins (Story 2.5 / AC4).
