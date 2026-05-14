@@ -7,11 +7,14 @@
  * Stage order (AC-1.5.1):
  *   Build & Docker Push → Unit Tests → Integration Tests → Deploy to Dev → E2E Smoke Tests
  *
- * Shared library (jenkins/vars/) must be registered in Jenkins → Global Pipeline Libraries
- * with name 'circleguard-shared-library' pointing to circle-guard-public/jenkins/.
+ * Shared library (jenkins/vars/) is registered as Global Pipeline Library
+ * 'circleguard-shared-library'. The repo root exposes vars/ via symlink vars → jenkins/vars
+ * so Jenkins can load the library from the same Git URL as the application (see jenkins/docker/casc).
  *
  * Pre-requisites (Jenkins admin one-time setup):
- *   1. Global Pipeline Libraries: name=circleguard-shared-library, path=circle-guard-public/jenkins/
+ *   1. For docker-compose stack: see docs/bootstrap/README.md — CasC registers the library
+ *      and DEV_BASE_URL from .env.jenkins. For manual Jenkins: Global Pipeline Libraries
+ *      name=circleguard-shared-library, same Git repo (root must contain vars/ → jenkins/vars).
  *   2. Global Environment Variables: DEV_BASE_URL=<gateway accessible URL>
  *      e.g. http://<k8s-node-ip>:<nodeport> or cluster-internal DNS if agent runs in-cluster
  */
@@ -113,12 +116,15 @@ pipeline {
 
     post {
         always {
-            // Pipeline-level aggregator: produces consolidated trend graph and top-level
-            // build badge in Jenkins (AC-1.5.2). Per-step publishers inside runUnitTests /
-            // runIntegrationTests already guarantee per-service reports; this is the
-            // belt-and-suspenders pipeline summary. allowEmptyResults keeps the build green
-            // until integration-test source sets are wired in Story 2.2.
-            junit allowEmptyResults: true, testResults: '**/build/test-results/**/*.xml'
+            // Split Gradle test task outputs so Jenkins shows Unit vs Integration separately (Story 2.5).
+            junit allowEmptyResults: true,
+                  testResults: '**/build/test-results/test/**/*.xml',
+                  checksName: 'Unit (aggregate)'
+            junit allowEmptyResults: true,
+                  testResults: '**/build/test-results/integrationTest/**/*.xml',
+                  checksName: 'Integration (aggregate)'
+            archiveArtifacts allowEmptyArchive: true,
+                             artifacts: 'services/*/build/reports/tests/**/*'
             echo "=== Jenkinsfile.dev pipeline complete — result: ${currentBuild.result ?: 'SUCCESS'} ==="
         }
     }

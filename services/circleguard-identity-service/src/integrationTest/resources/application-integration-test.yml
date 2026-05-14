@@ -1,0 +1,6 @@
+spring:
+  main:
+    allow-bean-definition-overriding: true
+
+jwt:
+  secret: "my-super-secret-test-key-32-chars-long"

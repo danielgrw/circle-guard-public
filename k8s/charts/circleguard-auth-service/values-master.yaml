@@ -1,8 +1,12 @@
-# Stub — fully defined in Story 4.1 (includes RollingUpdate strategy + HPA for promotion-service)
+# Master: mirror Stage registry/repo pattern — pipeline passes `--set image.tag=<7-char-sha>` via deployToNamespace.
 image:
   repository: docker-registry:5000/circleguard-auth-service
   tag: "master"
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
+
+service:
+  port: 8180
 
 env: master
 replicaCount: 2
+resources: {}

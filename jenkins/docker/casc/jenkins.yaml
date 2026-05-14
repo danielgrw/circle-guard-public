@@ -1,0 +1,72 @@
+# CircleGuard — Jenkins Configuration as Code
+# Loaded when CASC_JENKINS_CONFIG=/var/jenkins_home/casc (see jenkins/docker/Dockerfile).
+#
+# Required container environment (set via docker-compose from .env.jenkins):
+#   CIRCLEGUARD_GIT_URL   — HTTPS clone URL of this repository (same repo holds Jenkinsfile.dev + jenkins/vars)
+#
+# Optional:
+#   JENKINS_ADMIN_PASSWORD — default changeme
+#   DEV_BASE_URL           — gateway URL for E2E stub (default http://127.0.0.1:8087)
+#   DOCKER_BIN             — full path to docker CLI (CasC default /usr/bin/docker if unset)
+#   CI_REGISTRY_HOST       — host:port for image tag/push (default localhost:5000 for DooD + kind)
+#   CIRCLEGUARD_GIT_BRANCH — branch spec for the seeded Pipeline job (default */main)
+
+jenkins:
+  systemMessage: "CircleGuard CI — Configuration as Code (circleguard-shared-library + circle-guard-dev job)"
+  mode: NORMAL
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          name: "Administrator"
+          password: "${JENKINS_ADMIN_PASSWORD:-changeme}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: DEV_BASE_URL
+            value: "${DEV_BASE_URL:-http://127.0.0.1:8087}"
+          # Used by buildAndPush.groovy when bare `docker` is not on PATH (controller remoting).
+          - key: DOCKER_BIN
+            value: "${DOCKER_BIN:-/usr/bin/docker}"
+          - key: CI_REGISTRY_HOST
+            value: "${CI_REGISTRY_HOST:-localhost:5000}"
+
+unclassified:
+  globalLibraries:
+    libraries:
+      - name: "circleguard-shared-library"
+        defaultVersion: "${CIRCLEGUARD_LIB_BRANCH:-main}"
+        implicit: false
+        retriever:
+          modernSCM:
+            scm:
+              git:
+                remote: "${CIRCLEGUARD_GIT_URL}"
+
+jobs:
+  - script: |
+      def gitUrl = System.getenv("CIRCLEGUARD_GIT_URL")?.trim()
+      def branchSpec = (System.getenv("CIRCLEGUARD_GIT_BRANCH") ?: "*/main").trim()
+      if (gitUrl) {
+        pipelineJob("circle-guard-dev") {
+          definition {
+            cpsScm {
+              scm {
+                git {
+                  remote { url(gitUrl) }
+                  branch(branchSpec)
+                }
+              }
+              scriptPath("Jenkinsfile.dev")
+              lightweight(false)
+            }
+          }
+        }
+      } else {
+        println("[casc-job-seed] CIRCLEGUARD_GIT_URL empty — no circle-guard-dev job")
+      }

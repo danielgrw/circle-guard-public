@@ -18,10 +18,14 @@ public class SurveyListener {
         log.info("Received survey submission event: {}", event);
         
         try {
-            String anonymousId = (String) event.get("anonymousId");
-            Boolean hasSymptoms = (Boolean) event.get("hasSymptoms");
-            
-            if (anonymousId != null && Boolean.TRUE.equals(hasSymptoms)) {
+            Object rawId = event.get("anonymousId");
+            String anonymousId = rawId == null ? null : rawId.toString();
+            Object rawSymptoms = event.get("hasSymptoms");
+            boolean hasSymptoms =
+                    Boolean.TRUE.equals(rawSymptoms)
+                            || "true".equalsIgnoreCase(String.valueOf(rawSymptoms));
+
+            if (anonymousId != null && hasSymptoms) {
                 log.info("Promoting user {} to SUSPECT due to symptoms", anonymousId);
                 healthStatusService.updateStatus(anonymousId, "SUSPECT");
             }
@@ -35,9 +39,11 @@ public class SurveyListener {
         log.info("Received certificate validation event: {}", event);
         
         try {
-            String anonymousId = (String) event.get("anonymousId");
-            String status = (String) event.get("status");
-            
+            Object rawId = event.get("anonymousId");
+            String anonymousId = rawId == null ? null : rawId.toString();
+            Object rawStatus = event.get("status");
+            String status = rawStatus == null ? null : rawStatus.toString();
+
             if (anonymousId != null && "APPROVED".equals(status)) {
                 log.info("Restoring user {} to ACTIVE due to approved certificate", anonymousId);
                 healthStatusService.updateStatus(anonymousId, "ACTIVE");

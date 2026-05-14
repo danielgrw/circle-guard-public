@@ -1,8 +1,22 @@
-# Stub — fully defined in Story 4.1 (includes RollingUpdate strategy + HPA for promotion-service)
+# Master: mirror Stage registry/repo pattern — pipeline passes `--set image.tag=<7-char-sha>` via deployToNamespace.
+# HPA manifests render only when env=master and autoscaling.enabled (see templates/hpa.yaml).
 image:
   repository: docker-registry:5000/circleguard-promotion-service
   tag: "master"
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
+
+service:
+  port: 8088
 
 env: master
 replicaCount: 2
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70

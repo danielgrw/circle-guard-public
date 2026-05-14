@@ -11,6 +11,8 @@ plugins {
 
 rootProject.name = "circleguard"
 
+include("test-support")
+
 // Shared Libraries (Commented out as folders are missing on disk)
 // include("libs:circleguard-common")
 // include("libs:circleguard-security")

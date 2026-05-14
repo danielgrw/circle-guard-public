@@ -1,5 +1,6 @@
 package com.circleguard.promotion.service;
 
+import com.circleguard.promotion.integration.AbstractPromotionIntegrationTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,39 +17,44 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @SpringBootTest
-@ActiveProfiles("test")
+@ActiveProfiles("integration-test")
 @Testcontainers
-public class HealthStatusReevaluationTest {
+public class HealthStatusReevaluationTest extends AbstractPromotionIntegrationTest {
 
     @Container
-    static Neo4jContainer<?> neo4jContainer = new Neo4jContainer<>("neo4j:5.12")
-            .withAdminPassword("password");
+    @SuppressWarnings("resource")
+    static Neo4jContainer<?> neo4jContainer =
+            new Neo4jContainer<>("neo4j:5.26").withAdminPassword("password").withReuse(true);
 
     @Container
-    static GenericContainer<?> redis = new GenericContainer<>("redis:7.2.1")
-            .withExposedPorts(6379);
+    @SuppressWarnings("resource")
+    static PostgreSQLContainer<?> postgres =
+            new PostgreSQLContainer<>("postgres:16-alpine")
+                    .withDatabaseName("testdb")
+                    .withUsername("testuser")
+                    .withPassword("testpassword")
+                    .withReuse(true);
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15.4")
-            .withDatabaseName("testdb")
-            .withUsername("testuser")
-            .withPassword("testpassword");
+    @SuppressWarnings("resource")
+    static GenericContainer<?> redis =
+            new GenericContainer<>("redis:7.2-alpine").withExposedPorts(6379).withReuse(true);
 
     @DynamicPropertySource
     static void neo4jProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.neo4j.uri", neo4jContainer::getBoltUrl);
         registry.add("spring.neo4j.authentication.username", () -> "neo4j");
         registry.add("spring.neo4j.authentication.password", () -> "password");
-        registry.add("spring.data.redis.host", redis::getHost);
-        registry.add("spring.data.redis.port", redis::getFirstMappedPort);
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
-        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
+        registry.add("spring.data.redis.host", redis::getHost);
+        registry.add("spring.data.redis.port", redis::getFirstMappedPort);
+        registry.add("spring.jpa.hibernate.ddl-auto", () -> "none");
+        registry.add("spring.flyway.enabled", () -> "true");
     }
 
     @Autowired
@@ -67,55 +73,44 @@ public class HealthStatusReevaluationTest {
 
     @Test
     void testSingleRelease() {
-        // A (CONFIRMED) -[r1]-> B (SUSPECT)
         createNode("A", "CONFIRMED");
         createNode("B", "SUSPECT");
         createRelationship("A", "B");
 
-        // Resolve A
         healthStatusService.resolveStatus("A");
 
-        // B should become ACTIVE
         assertEquals("ACTIVE", getStatus("B"));
     }
 
     @Test
     void testBlockedRelease() {
-        // A (CONFIRMED) -[r1]-> B (SUSPECT) <-[r2]- C (CONFIRMED)
         createNode("A", "CONFIRMED");
         createNode("B", "SUSPECT");
         createNode("C", "CONFIRMED");
         createRelationship("A", "B");
         createRelationship("C", "B");
 
-        // Resolve A
         healthStatusService.resolveStatus("A");
 
-        // B should stay SUSPECT because of C
         assertEquals("SUSPECT", getStatus("B"));
     }
 
     @Test
     void testMultiHopRelease() {
-        // A (CONFIRMED) -> B (SUSPECT) -> C (PROBABLE)
         createNode("A", "CONFIRMED");
         createNode("B", "SUSPECT");
         createNode("C", "PROBABLE");
         createRelationship("A", "B");
         createRelationship("B", "C");
 
-        // Resolve A
         healthStatusService.resolveStatus("A");
 
-        // Both B and C should become ACTIVE
         assertEquals("ACTIVE", getStatus("B"));
         assertEquals("ACTIVE", getStatus("C"));
     }
 
     @Test
     void testPartialReleaseInMesh() {
-        // A (CONFIRMED) -> B (SUSPECT) -> C (PROBABLE)
-        // D (SUSPECT) -> C (PROBABLE)
         createNode("A", "CONFIRMED");
         createNode("B", "SUSPECT");
         createNode("C", "PROBABLE");
@@ -124,12 +119,9 @@ public class HealthStatusReevaluationTest {
         createRelationship("B", "C");
         createRelationship("D", "C");
 
-        // Resolve A
         healthStatusService.resolveStatus("A");
 
-        // B becomes ACTIVE
         assertEquals("ACTIVE", getStatus("B"));
-        // C stays PROBABLE because of D
         assertEquals("PROBABLE", getStatus("C"));
     }
 
@@ -141,8 +133,9 @@ public class HealthStatusReevaluationTest {
     }
 
     private void createRelationship(String id1, String id2) {
-        neo4jClient.query("MATCH (u1:User {anonymousId: $id1}), (u2:User {anonymousId: $id2}) " +
-                "CREATE (u1)-[:ENCOUNTERED {startTime: timestamp()}]->(u2)")
+        neo4jClient.query(
+                        "MATCH (u1:User {anonymousId: $id1}), (u2:User {anonymousId: $id2}) "
+                                + "CREATE (u1)-[:ENCOUNTERED {startTime: timestamp()}]->(u2)")
                 .bind(id1).to("id1")
                 .bind(id2).to("id2")
                 .run();

@@ -1,8 +1,12 @@
-# Stub — fully defined in Story 3.1
+# Port matches services/circleguard-notification-service/src/main/resources/application.yml (server.port: 8082).
+# See circleguard-gateway-service/values-stage.yaml for registry alignment notes.
 image:
   repository: docker-registry:5000/circleguard-notification-service
   tag: "stage"
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
+
+service:
+  port: 8082
 
 env: stage
 replicaCount: 1

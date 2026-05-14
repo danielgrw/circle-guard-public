@@ -46,3 +46,18 @@ web-build/
 *_data/
 pgdata/
 neo4jdata/
+
+# Local Jenkins CI secrets (see .env.jenkins.example)
+.env.jenkins
+
+# Playwright E2E ephemeral output (archive from Jenkins/CI artifacts only — not committed)
+
+tests/e2e/reports/
+
+tests/e2e/test-results/
+
+# Locust (generated CSVs / bytecode — archive from CI only)
+tests/performance/locust_results*
+tests/performance/.venv/
+tests/performance/**/__pycache__/
+tests/performance/**/*.pyc

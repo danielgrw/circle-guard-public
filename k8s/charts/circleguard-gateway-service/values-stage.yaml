@@ -1,8 +1,13 @@
-# Stub — fully defined in Story 3.1
+# Stage: same image repository convention as dev (`buildAndPush` + `deployToNamespace`).
+# Override host only if cluster nodes cannot pull from localhost:5000 — set CI_REGISTRY_HOST in Jenkins
+# and duplicate that host here (or use a sealed/per-env values override).
 image:
   repository: docker-registry:5000/circleguard-gateway-service
   tag: "stage"
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
+
+service:
+  port: 8087
 
 env: stage
 replicaCount: 1

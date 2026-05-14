@@ -1,0 +1,2082 @@
+diff --git a/.gitignore b/.gitignore
+index 6b4e404..15d50c9 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -49,3 +49,15 @@ neo4jdata/
+ 
+ # Local Jenkins CI secrets (see .env.jenkins.example)
+ .env.jenkins
++
++# Playwright E2E ephemeral output (archive from Jenkins/CI artifacts only — not committed)
++
++tests/e2e/reports/
++
++tests/e2e/test-results/
++
++# Locust (generated CSVs / bytecode — archive from CI only)
++tests/performance/locust_results*
++tests/performance/.venv/
++tests/performance/**/__pycache__/
++tests/performance/**/*.pyc
+diff --git a/Jenkinsfile.dev b/Jenkinsfile.dev
+index 8dc8015..73fd9a0 100644
+--- a/Jenkinsfile.dev
++++ b/Jenkinsfile.dev
+@@ -116,12 +116,15 @@ pipeline {
+ 
+     post {
+         always {
+-            // Pipeline-level aggregator: produces consolidated trend graph and top-level
+-            // build badge in Jenkins (AC-1.5.2). Per-step publishers inside runUnitTests /
+-            // runIntegrationTests already guarantee per-service reports; this is the
+-            // belt-and-suspenders pipeline summary. allowEmptyResults keeps the build green
+-            // until integration-test source sets are wired in Story 2.2.
+-            junit allowEmptyResults: true, testResults: '**/build/test-results/**/*.xml'
++            // Split Gradle test task outputs so Jenkins shows Unit vs Integration separately (Story 2.5).
++            junit allowEmptyResults: true,
++                  testResults: '**/build/test-results/test/**/*.xml',
++                  checksName: 'Unit (aggregate)'
++            junit allowEmptyResults: true,
++                  testResults: '**/build/test-results/integrationTest/**/*.xml',
++                  checksName: 'Integration (aggregate)'
++            archiveArtifacts allowEmptyArchive: true,
++                             artifacts: 'services/*/build/reports/tests/**/*'
+             echo "=== Jenkinsfile.dev pipeline complete — result: ${currentBuild.result ?: 'SUCCESS'} ==="
+         }
+     }
+diff --git a/README.md b/README.md
+index 6c95d14..a6c671c 100644
+--- a/README.md
++++ b/README.md
+@@ -84,6 +84,13 @@ CircleGuard follows a **Microservice Architecture** built on a **Hybrid Data Mod
+ 
+ ---
+ 
++## 🤝 Contributing
++
++- **Commit messages:** Follow [Conventional Commits](CONTRIBUTING.md#commit-messages-conventional-commits) — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for allowed prefixes (`feat:`, `fix:`, `test:`, `ci:`, `chore:`) and anti-patterns.
++- **CI:** Dev pipeline — `Jenkinsfile.dev`; Stage promotion gate — `Jenkinsfile.stage` (unit + integration green before deploy to `circleguard-stage`).
++
++---
++
+ ## 💻 Local Development
+ 
+ ### 1. Infrastructure
+@@ -151,6 +158,26 @@ We maintain high system integrity via multi-level testing:
+ 
+ ---
+ 
++## Release notes (git-cliff)
++
++The Master pipeline will call `generateReleaseNotes()` (see `jenkins/vars/generateReleaseNotes.groovy`). Operators and agents need:
++
++| Requirement | Notes |
++|:---|:---|
++| **git-cliff** | Install on Jenkins agents so `git-cliff` is on `PATH`, **or** set `GIT_CLIFF_BIN` to the binary path (e.g. `/usr/local/bin/git-cliff`). |
++| **Git tags** | The step requires at least one **reachable tag** (`git describe --tags --abbrev=0`). Without tags it fails fast with a clear error. |
++| **Config** | `cliff.toml` at the **repository root** defines sections for Conventional Commit groups (`Features`, `Fixes`, `Tests`, `CI`, `Chores`). A duplicate copy lives under `jenkins/resources/cliff.toml` only for visibility — **keep both in sync** when editing. |
++| **Output** | The library runs `git-cliff --tag $(git describe --tags --abbrev=0) -o RELEASE_NOTES.md`, archives `RELEASE_NOTES.md` and `release-notes.properties`, and stores the same text as **git notes** on the tagged commit (`refs/notes/cliff-releases`). |
++| **Publishing notes** | To push notes to `origin`: `git push origin refs/notes/cliff-releases`. Wrap with Jenkins credentials — e.g. `sshagent(credentials: ['circleguard-git-ssh']) { sh 'git push origin refs/notes/cliff-releases' }` **or** your org’s standard Git/SSH credential binding. **Replace `circleguard-git-ssh`** with the real **Credentials ID** from your Jenkins controller (manage credentials / job param); keep the ID documented next to the Master pipeline job. |
++
++Local dry-run (after [installing git-cliff](https://github.com/orhun/git-cliff)):
++
++```bash
++git-cliff --tag "$(git describe --tags --abbrev=0)" -o RELEASE_NOTES.md
++```
++
++---
++
+ ## 🔐 Privacy & Compliance
+ 
+ - **FERPA Compliance**: Student identities are never stored in the contact graph.
+diff --git a/jenkins/vars/generateReleaseNotes.groovy b/jenkins/vars/generateReleaseNotes.groovy
+index b64a627..efb48e5 100644
+--- a/jenkins/vars/generateReleaseNotes.groovy
++++ b/jenkins/vars/generateReleaseNotes.groovy
+@@ -1,27 +1,100 @@
+ /**
+  * generateReleaseNotes — Jenkins Shared Library step
+  *
+- * STUB — Full implementation in Story 4.2.
+- *
+  * Generates RELEASE_NOTES.md from Conventional Commit history using git-cliff.
+- * Full implementation runs:
++ * Canonical command (also used for local verification):
+  *   git-cliff --tag $(git describe --tags --abbrev=0) -o RELEASE_NOTES.md
+  *
+  * Requires:
+- * - cliff.toml at repository root (created in Story 4.2)
+- * - Conventional Commits enforced from day 1 (AR-8)
+- * - git tags present on the branch
++ * - cliff.toml at repository root (mirrored under jenkins/resources/cliff.toml for visibility only)
++ * - git-cliff on agent PATH, or GIT_CLIFF_BIN pointing at the binary
++ * - at least one reachable Git tag (git describe --tags --abbrev=0)
++ * - Conventional Commits (AR-8) for commits that should appear in the notes
++ *
++ * Release notes are also stored as git notes on the tagged commit (ref refs/notes/cliff-releases).
++ * To publish notes: `git push origin refs/notes/cliff-releases` using a Jenkins credentialed step
++ * or a service account (see README § Release notes).
+  *
+  * Usage in Jenkinsfile:
+  *   generateReleaseNotes()
+  */
++
+ def call() {
+-    echo "=== generateReleaseNotes (stub) — full implementation in Story 4.2 ==="
+-    echo "Story 4.2 replaces this stub with git-cliff execution."
+-    // Story 4.2 replaces this stub with:
+-    //   sh "git-cliff --tag \$(git describe --tags --abbrev=0) -o RELEASE_NOTES.md"
+-    sh "echo 'Release notes stub — see Story 4.2' > RELEASE_NOTES.md"
+-
+-    // allowEmptyArchive: true is the sole guard — no try/catch needed or permitted
+-    archiveArtifacts allowEmptyArchive: true, artifacts: 'RELEASE_NOTES.md'
++    echo '=== generateReleaseNotes — git-cliff ==='
++
++    def cliffBin = env.GIT_CLIFF_BIN?.trim() ?: 'git-cliff'
++    if (!(cliffBin ==~ /^[A-Za-z0-9._\/+-]+$/)) {
++        error('generateReleaseNotes: GIT_CLIFF_BIN must be a single path with no spaces (use a symlink on the agent if needed).')
++    }
++
++    def repoRoot = sh(script: 'git rev-parse --show-toplevel', returnStdout: true).trim()
++    if (!repoRoot) {
++        error('generateReleaseNotes: not inside a Git repository (git rev-parse --show-toplevel failed).')
++    }
++
++    def workspaceRoot = env.WORKSPACE?.trim()
++    if (!workspaceRoot) {
++        error('generateReleaseNotes: WORKSPACE is unset; cannot resolve artifact paths.')
++    }
++
++    String artifactPrefix = ''
++    def wsDir = new File(workspaceRoot).canonicalFile
++    def rrDir = new File(repoRoot).canonicalFile
++    def rrPath = rrDir.path
++    def wsPath = wsDir.path
++    if (rrPath != wsPath) {
++        if (!rrPath.startsWith(wsPath + File.separator)) {
++            error('generateReleaseNotes: git repository root is not under WORKSPACE; cannot archive artifacts.')
++        }
++        artifactPrefix = rrPath.substring(wsPath.length() + 1).replace(File.separator, '/') + '/'
++    }
++
++    dir(repoRoot) {
++        if (!fileExists('cliff.toml')) {
++            error('generateReleaseNotes: cliff.toml not found at repository root.')
++        }
++
++        def tagProbe = sh(script: 'git describe --tags --abbrev=0 >/dev/null 2>&1', returnStatus: true)
++        if (tagProbe != 0) {
++            error('generateReleaseNotes: no reachable Git tag (git describe --tags --abbrev=0 failed). Create a release tag on the target commit before running this step.')
++        }
++
++        def releaseTag = sh(script: 'git describe --tags --abbrev=0', returnStdout: true).trim()
++        if (!(releaseTag ==~ /^[A-Za-z0-9._\/@+:-]+$/)) {
++            error("generateReleaseNotes: resolved tag contains unexpected characters: ${releaseTag}")
++        }
++
++        def taggedCommit = sh(script: 'git rev-list -n 1 "$(git describe --tags --abbrev=0)"', returnStdout: true).trim()
++        if (!(taggedCommit ==~ /^[0-9a-f]{7,40}$/)) {
++            error('generateReleaseNotes: could not resolve a 40-hex (or short) commit SHA for the release tag.')
++        }
++
++        echo "=== generateReleaseNotes: scope tag=${releaseTag} commit=${taggedCommit} cliff=${cliffBin} ==="
++
++        withEnv(["CG_CLIFF_BIN=${cliffBin}", "CG_TAGGED_COMMIT=${taggedCommit}"]) {
++            sh '''#!/bin/bash
++                set -euo pipefail
++                exec "${CG_CLIFF_BIN}" --tag "$(git describe --tags --abbrev=0)" -o RELEASE_NOTES.md
++            '''
++
++            writeFile file: 'release-notes.properties', text: """release.git.tag=${releaseTag}
++release.git.commit=${taggedCommit}
++release.notes.file=RELEASE_NOTES.md
++"""
++
++            sh '''#!/bin/bash
++                set -euo pipefail
++                if git notes --ref=refs/notes/cliff-releases show "$CG_TAGGED_COMMIT" >/dev/null 2>&1; then
++                  git notes --ref=refs/notes/cliff-releases remove "$CG_TAGGED_COMMIT"
++                fi
++                git notes --ref=refs/notes/cliff-releases add -f -F RELEASE_NOTES.md "$CG_TAGGED_COMMIT"
++            '''
++        }
++
++        echo "Release notes attached as git notes on ${taggedCommit} (refs/notes/cliff-releases). Push with: git push origin refs/notes/cliff-releases"
++    }
++
++    archiveArtifacts allowEmptyArchive: false,
++                     artifacts: "${artifactPrefix}RELEASE_NOTES.md,${artifactPrefix}release-notes.properties",
++                     fingerprint: true
+ }
+diff --git a/jenkins/vars/runE2ETests.groovy b/jenkins/vars/runE2ETests.groovy
+index 3e7e39f..87ba62a 100644
+--- a/jenkins/vars/runE2ETests.groovy
++++ b/jenkins/vars/runE2ETests.groovy
+@@ -1,31 +1,43 @@
+ /**
+  * runE2ETests — Jenkins Shared Library step
+  *
+- * STUB — Full implementation in Story 3.2.
+- *
+- * Runs Playwright E2E tests against a deployed environment. This IS a hard
+- * gate: a non-zero Playwright exit code propagates as a pipeline failure.
+- * DO NOT wrap in a try/catch that swallows exceptions.
++ * Runs Playwright E2E tests against a deployed environment. This IS a hard gate:
++ * on failure, HTML reports are archived first, then error("E2E tests failed") is called.
++ * Do not wrap in try/catch that swallows the non-zero Playwright exit without that error().
+  *
+  * URL resolution order: baseUrl arg → env.STAGE_BASE_URL → env.DEV_BASE_URL.
+- * Fails fast if no URL resolves — prevents silent misconfiguration from being
+- * masked while the stub is in place (and silently passing in every pipeline run
+- * before Story 3.2 wires in the real Playwright invocation).
++ * playwright.config.ts prefers STAGE_BASE_URL, then DEV_BASE_URL, when CI=true. The sh
++ * step runs under withEnv(STAGE_BASE_URL=resolved target) so the Groovy-resolved URL
++ * (including baseUrl argument overrides) matches what Playwright reads.
+  *
+  * @param baseUrl  Optional override for base URL (falls back to env vars)
+  *
+  * Usage in Jenkinsfile:
+- *   runE2ETests()                          // reads env.STAGE_BASE_URL → env.DEV_BASE_URL
+- *   runE2ETests("http://my-override:8087") // explicit override
++ *   runE2ETests()
++ *   runE2ETests("http://my-override:8087")
+  */
+ def call(String baseUrl = '') {
+     def targetUrl = baseUrl ?: (env.STAGE_BASE_URL ?: env.DEV_BASE_URL ?: '')
+     if (!targetUrl) {
+         error("runE2ETests: no target URL configured — set STAGE_BASE_URL or DEV_BASE_URL, or pass a baseUrl argument")
+     }
+-    echo "=== runE2ETests (stub) — target: ${targetUrl} ==="
+-    echo "Full Playwright implementation delivered in Story 3.2."
+-    // Story 3.2 replaces this stub with:
+-    //   sh "npx playwright test --config tests/e2e/playwright.config.ts"
+-    // and adds HTML report archiving via publishHTML.
++    echo "=== runE2ETests — target: ${targetUrl} ==="
++
++    def rc
++    withEnv(["STAGE_BASE_URL=${targetUrl}"]) {
++        rc = sh returnStatus: true, script: '''
++            set -e
++            cd tests/e2e
++            npm ci
++            npx playwright install chromium
++            export CI=true
++            npx playwright test
++        '''
++    }
++
++    archiveArtifacts allowEmptyArchive: true, artifacts: 'tests/e2e/reports/**/*'
++
++    if (rc != 0) {
++        error("E2E tests failed")
++    }
+ }
+diff --git a/jenkins/vars/runIntegrationTests.groovy b/jenkins/vars/runIntegrationTests.groovy
+index 1fbd394..3b198c8 100644
+--- a/jenkins/vars/runIntegrationTests.groovy
++++ b/jenkins/vars/runIntegrationTests.groovy
+@@ -8,9 +8,9 @@
+  * Integration tests live under src/integrationTest/java/ and start real
+  * Testcontainers (Kafka → Neo4j → Postgres → Redis order as applicable).
+  *
+- * The glob is scoped to the specific service subproject to prevent cross-service
+- * result contamination when multiple services share a single non-clean workspace.
+- * JUnit XML output: services/{serviceName}/build/test-results/**\/*.xml
++ * JUnit XML output: services/{serviceName}/build/test-results/integrationTest/**/*.xml
++ *
++ * On non-zero Gradle exit: publishes reports then error("Tests failed").
+  *
+  * @param serviceName  Full Gradle subproject name, e.g. "circleguard-auth-service"
+  *
+@@ -27,13 +27,16 @@ def call(String serviceName) {
+ 
+     echo "=== runIntegrationTests: ${serviceName} ==="
+     withEnv(["TESTCONTAINERS_REUSE_ENABLE=false"]) {
++        def rc = 1
+         try {
+-            sh "./gradlew :services:${serviceName}:integrationTest"
++            rc = sh(script: "./gradlew :services:${serviceName}:integrationTest", returnStatus: true)
+         } finally {
+-            // Scoped to this service's subproject — avoids contaminating results
+-            // from other services that may exist in the same workspace
+             junit allowEmptyResults: true,
+-                  testResults: "services/${serviceName}/build/test-results/**/*.xml"
++                  testResults: "services/${serviceName}/build/test-results/integrationTest/**/*.xml",
++                  checksName: "Integration — ${serviceName}"
++        }
++        if (rc != 0) {
++            error("Tests failed")
+         }
+     }
+ }
+diff --git a/jenkins/vars/runUnitTests.groovy b/jenkins/vars/runUnitTests.groovy
+index 8a35e74..da64391 100644
+--- a/jenkins/vars/runUnitTests.groovy
++++ b/jenkins/vars/runUnitTests.groovy
+@@ -5,10 +5,13 @@
+  * results (even when tests fail), satisfying AC-1.4.4.
+  *
+  * Unit tests live under src/test/java/ and do NOT spin up containers.
+- * JUnit XML output: services/{serviceName}/build/test-results/**\/*.xml
++ * JUnit XML output: services/{serviceName}/build/test-results/test/**/*.xml
+  *
+- * The glob is scoped to the specific service subproject to prevent cross-service
+- * result contamination when multiple services share a single non-clean workspace.
++ * The glob is scoped to the unit-test Gradle task name to avoid mixing integration
++ * results and to surface separate checks in Jenkins (Story 2.5 / AC4).
++ *
++ * On non-zero Gradle exit: publishes reports then error("Tests failed") (architecture
++ * pipeline failure contract).
+  *
+  * @param serviceName  Full Gradle subproject name, e.g. "circleguard-auth-service"
+  *
+@@ -24,12 +27,15 @@ def call(String serviceName) {
+     }
+ 
+     echo "=== runUnitTests: ${serviceName} ==="
++    def rc = 1
+     try {
+-        sh "./gradlew :services:${serviceName}:test"
++        rc = sh(script: "./gradlew :services:${serviceName}:test", returnStatus: true)
+     } finally {
+-        // Scoped to this service's subproject — avoids contaminating results
+-        // from other services that may exist in the same workspace
+         junit allowEmptyResults: true,
+-              testResults: "services/${serviceName}/build/test-results/**/*.xml"
++              testResults: "services/${serviceName}/build/test-results/test/**/*.xml",
++              checksName: "Unit — ${serviceName}"
++    }
++    if (rc != 0) {
++        error("Tests failed")
+     }
+ }
+diff --git a/k8s/charts/circleguard-auth-service/templates/deployment.yaml b/k8s/charts/circleguard-auth-service/templates/deployment.yaml
+index 77a5b10..aab7830 100644
+--- a/k8s/charts/circleguard-auth-service/templates/deployment.yaml
++++ b/k8s/charts/circleguard-auth-service/templates/deployment.yaml
+@@ -9,6 +9,13 @@ metadata:
+     version: {{ .Values.image.tag }}
+ spec:
+   replicas: {{ .Values.replicaCount }}
++{{- if eq .Values.env "master" }}
++  strategy:
++    type: RollingUpdate
++    rollingUpdate:
++      maxSurge: 1
++      maxUnavailable: 0
++{{- end }}
+   selector:
+     matchLabels:
+       app: {{ .Chart.Name }}
+diff --git a/k8s/charts/circleguard-auth-service/values-master.yaml b/k8s/charts/circleguard-auth-service/values-master.yaml
+index 8d52feb..d00e30a 100644
+--- a/k8s/charts/circleguard-auth-service/values-master.yaml
++++ b/k8s/charts/circleguard-auth-service/values-master.yaml
+@@ -1,8 +1,12 @@
+-# Stub — fully defined in Story 4.1 (includes RollingUpdate strategy + HPA for promotion-service)
++# Master: mirror Stage registry/repo pattern — pipeline passes `--set image.tag=<7-char-sha>` via deployToNamespace.
+ image:
+   repository: docker-registry:5000/circleguard-auth-service
+   tag: "master"
+-  pullPolicy: IfNotPresent
++  pullPolicy: Always
++
++service:
++  port: 8180
+ 
+ env: master
+ replicaCount: 2
++resources: {}
+diff --git a/k8s/charts/circleguard-auth-service/values-stage.yaml b/k8s/charts/circleguard-auth-service/values-stage.yaml
+index 628740c..9ff1a20 100644
+--- a/k8s/charts/circleguard-auth-service/values-stage.yaml
++++ b/k8s/charts/circleguard-auth-service/values-stage.yaml
+@@ -1,8 +1,11 @@
+-# Stub — fully defined in Story 3.1
++# See circleguard-gateway-service/values-stage.yaml for registry alignment notes.
+ image:
+   repository: docker-registry:5000/circleguard-auth-service
+   tag: "stage"
+-  pullPolicy: IfNotPresent
++  pullPolicy: Always
++
++service:
++  port: 8180
+ 
+ env: stage
+ replicaCount: 1
+diff --git a/k8s/charts/circleguard-form-service/templates/deployment.yaml b/k8s/charts/circleguard-form-service/templates/deployment.yaml
+index 77a5b10..aab7830 100644
+--- a/k8s/charts/circleguard-form-service/templates/deployment.yaml
++++ b/k8s/charts/circleguard-form-service/templates/deployment.yaml
+@@ -9,6 +9,13 @@ metadata:
+     version: {{ .Values.image.tag }}
+ spec:
+   replicas: {{ .Values.replicaCount }}
++{{- if eq .Values.env "master" }}
++  strategy:
++    type: RollingUpdate
++    rollingUpdate:
++      maxSurge: 1
++      maxUnavailable: 0
++{{- end }}
+   selector:
+     matchLabels:
+       app: {{ .Chart.Name }}
+diff --git a/k8s/charts/circleguard-form-service/values-master.yaml b/k8s/charts/circleguard-form-service/values-master.yaml
+index 2071700..abef8a9 100644
+--- a/k8s/charts/circleguard-form-service/values-master.yaml
++++ b/k8s/charts/circleguard-form-service/values-master.yaml
+@@ -1,8 +1,12 @@
+-# Stub — fully defined in Story 4.1 (includes RollingUpdate strategy + HPA for promotion-service)
++# Master: mirror Stage registry/repo pattern — pipeline passes `--set image.tag=<7-char-sha>` via deployToNamespace.
+ image:
+   repository: docker-registry:5000/circleguard-form-service
+   tag: "master"
+-  pullPolicy: IfNotPresent
++  pullPolicy: Always
++
++service:
++  port: 8086
+ 
+ env: master
+ replicaCount: 2
++resources: {}
+diff --git a/k8s/charts/circleguard-form-service/values-stage.yaml b/k8s/charts/circleguard-form-service/values-stage.yaml
+index 71778c8..5ce232f 100644
+--- a/k8s/charts/circleguard-form-service/values-stage.yaml
++++ b/k8s/charts/circleguard-form-service/values-stage.yaml
+@@ -1,8 +1,11 @@
+-# Stub — fully defined in Story 3.1
++# See circleguard-gateway-service/values-stage.yaml for registry alignment notes.
+ image:
+   repository: docker-registry:5000/circleguard-form-service
+   tag: "stage"
+-  pullPolicy: IfNotPresent
++  pullPolicy: Always
++
++service:
++  port: 8086
+ 
+ env: stage
+ replicaCount: 1
+diff --git a/k8s/charts/circleguard-gateway-service/templates/deployment.yaml b/k8s/charts/circleguard-gateway-service/templates/deployment.yaml
+index 77a5b10..aab7830 100644
+--- a/k8s/charts/circleguard-gateway-service/templates/deployment.yaml
++++ b/k8s/charts/circleguard-gateway-service/templates/deployment.yaml
+@@ -9,6 +9,13 @@ metadata:
+     version: {{ .Values.image.tag }}
+ spec:
+   replicas: {{ .Values.replicaCount }}
++{{- if eq .Values.env "master" }}
++  strategy:
++    type: RollingUpdate
++    rollingUpdate:
++      maxSurge: 1
++      maxUnavailable: 0
++{{- end }}
+   selector:
+     matchLabels:
+       app: {{ .Chart.Name }}
+diff --git a/k8s/charts/circleguard-gateway-service/values-master.yaml b/k8s/charts/circleguard-gateway-service/values-master.yaml
+index d8996ac..5627a15 100644
+--- a/k8s/charts/circleguard-gateway-service/values-master.yaml
++++ b/k8s/charts/circleguard-gateway-service/values-master.yaml
+@@ -1,8 +1,13 @@
+-# Stub — fully defined in Story 4.1 (includes RollingUpdate strategy + HPA for promotion-service)
++# Master: mirror Stage registry/repo pattern — pipeline passes `--set image.tag=<7-char-sha>` via deployToNamespace.
++# Align host with buildAndPush + cluster pull path (docker-registry vs CI_REGISTRY_HOST) per Story 3-1 notes.
+ image:
+   repository: docker-registry:5000/circleguard-gateway-service
+   tag: "master"
+-  pullPolicy: IfNotPresent
++  pullPolicy: Always
++
++service:
++  port: 8087
+ 
+ env: master
+ replicaCount: 2
++resources: {}
+diff --git a/k8s/charts/circleguard-gateway-service/values-stage.yaml b/k8s/charts/circleguard-gateway-service/values-stage.yaml
+index 9f8734b..90eac22 100644
+--- a/k8s/charts/circleguard-gateway-service/values-stage.yaml
++++ b/k8s/charts/circleguard-gateway-service/values-stage.yaml
+@@ -1,8 +1,13 @@
+-# Stub — fully defined in Story 3.1
++# Stage: same image repository convention as dev (`buildAndPush` + `deployToNamespace`).
++# Override host only if cluster nodes cannot pull from localhost:5000 — set CI_REGISTRY_HOST in Jenkins
++# and duplicate that host here (or use a sealed/per-env values override).
+ image:
+   repository: docker-registry:5000/circleguard-gateway-service
+   tag: "stage"
+-  pullPolicy: IfNotPresent
++  pullPolicy: Always
++
++service:
++  port: 8087
+ 
+ env: stage
+ replicaCount: 1
+diff --git a/k8s/charts/circleguard-identity-service/templates/deployment.yaml b/k8s/charts/circleguard-identity-service/templates/deployment.yaml
+index 77a5b10..aab7830 100644
+--- a/k8s/charts/circleguard-identity-service/templates/deployment.yaml
++++ b/k8s/charts/circleguard-identity-service/templates/deployment.yaml
+@@ -9,6 +9,13 @@ metadata:
+     version: {{ .Values.image.tag }}
+ spec:
+   replicas: {{ .Values.replicaCount }}
++{{- if eq .Values.env "master" }}
++  strategy:
++    type: RollingUpdate
++    rollingUpdate:
++      maxSurge: 1
++      maxUnavailable: 0
++{{- end }}
+   selector:
+     matchLabels:
+       app: {{ .Chart.Name }}
+diff --git a/k8s/charts/circleguard-identity-service/values-master.yaml b/k8s/charts/circleguard-identity-service/values-master.yaml
+index f6c38c6..f617b0d 100644
+--- a/k8s/charts/circleguard-identity-service/values-master.yaml
++++ b/k8s/charts/circleguard-identity-service/values-master.yaml
+@@ -1,8 +1,12 @@
+-# Stub — fully defined in Story 4.1 (includes RollingUpdate strategy + HPA for promotion-service)
++# Master: mirror Stage registry/repo pattern — pipeline passes `--set image.tag=<7-char-sha>` via deployToNamespace.
+ image:
+   repository: docker-registry:5000/circleguard-identity-service
+   tag: "master"
+-  pullPolicy: IfNotPresent
++  pullPolicy: Always
++
++service:
++  port: 8083
+ 
+ env: master
+ replicaCount: 2
++resources: {}
+diff --git a/k8s/charts/circleguard-identity-service/values-stage.yaml b/k8s/charts/circleguard-identity-service/values-stage.yaml
+index f2c67c6..d892a25 100644
+--- a/k8s/charts/circleguard-identity-service/values-stage.yaml
++++ b/k8s/charts/circleguard-identity-service/values-stage.yaml
+@@ -1,8 +1,11 @@
+-# Stub — fully defined in Story 3.1
++# See circleguard-gateway-service/values-stage.yaml for registry alignment notes.
+ image:
+   repository: docker-registry:5000/circleguard-identity-service
+   tag: "stage"
+-  pullPolicy: IfNotPresent
++  pullPolicy: Always
++
++service:
++  port: 8083
+ 
+ env: stage
+ replicaCount: 1
+diff --git a/k8s/charts/circleguard-notification-service/templates/deployment.yaml b/k8s/charts/circleguard-notification-service/templates/deployment.yaml
+index 77a5b10..aab7830 100644
+--- a/k8s/charts/circleguard-notification-service/templates/deployment.yaml
++++ b/k8s/charts/circleguard-notification-service/templates/deployment.yaml
+@@ -9,6 +9,13 @@ metadata:
+     version: {{ .Values.image.tag }}
+ spec:
+   replicas: {{ .Values.replicaCount }}
++{{- if eq .Values.env "master" }}
++  strategy:
++    type: RollingUpdate
++    rollingUpdate:
++      maxSurge: 1
++      maxUnavailable: 0
++{{- end }}
+   selector:
+     matchLabels:
+       app: {{ .Chart.Name }}
+diff --git a/k8s/charts/circleguard-notification-service/values-master.yaml b/k8s/charts/circleguard-notification-service/values-master.yaml
+index 297ec1f..a7ee602 100644
+--- a/k8s/charts/circleguard-notification-service/values-master.yaml
++++ b/k8s/charts/circleguard-notification-service/values-master.yaml
+@@ -1,8 +1,13 @@
+-# Stub — fully defined in Story 4.1 (includes RollingUpdate strategy + HPA for promotion-service)
++# Port matches services/circleguard-notification-service/src/main/resources/application.yml (server.port: 8082).
++# Master: mirror Stage registry/repo pattern — pipeline passes `--set image.tag=<7-char-sha>` via deployToNamespace.
+ image:
+   repository: docker-registry:5000/circleguard-notification-service
+   tag: "master"
+-  pullPolicy: IfNotPresent
++  pullPolicy: Always
++
++service:
++  port: 8082
+ 
+ env: master
+ replicaCount: 2
++resources: {}
+diff --git a/k8s/charts/circleguard-notification-service/values-stage.yaml b/k8s/charts/circleguard-notification-service/values-stage.yaml
+index 51e220d..7c4f172 100644
+--- a/k8s/charts/circleguard-notification-service/values-stage.yaml
++++ b/k8s/charts/circleguard-notification-service/values-stage.yaml
+@@ -1,8 +1,12 @@
+-# Stub — fully defined in Story 3.1
++# Port matches services/circleguard-notification-service/src/main/resources/application.yml (server.port: 8082).
++# See circleguard-gateway-service/values-stage.yaml for registry alignment notes.
+ image:
+   repository: docker-registry:5000/circleguard-notification-service
+   tag: "stage"
+-  pullPolicy: IfNotPresent
++  pullPolicy: Always
++
++service:
++  port: 8082
+ 
+ env: stage
+ replicaCount: 1
+diff --git a/k8s/charts/circleguard-promotion-service/templates/deployment.yaml b/k8s/charts/circleguard-promotion-service/templates/deployment.yaml
+index 77a5b10..aab7830 100644
+--- a/k8s/charts/circleguard-promotion-service/templates/deployment.yaml
++++ b/k8s/charts/circleguard-promotion-service/templates/deployment.yaml
+@@ -9,6 +9,13 @@ metadata:
+     version: {{ .Values.image.tag }}
+ spec:
+   replicas: {{ .Values.replicaCount }}
++{{- if eq .Values.env "master" }}
++  strategy:
++    type: RollingUpdate
++    rollingUpdate:
++      maxSurge: 1
++      maxUnavailable: 0
++{{- end }}
+   selector:
+     matchLabels:
+       app: {{ .Chart.Name }}
+diff --git a/k8s/charts/circleguard-promotion-service/values-master.yaml b/k8s/charts/circleguard-promotion-service/values-master.yaml
+index 4e2296d..23b7aa6 100644
+--- a/k8s/charts/circleguard-promotion-service/values-master.yaml
++++ b/k8s/charts/circleguard-promotion-service/values-master.yaml
+@@ -1,8 +1,22 @@
+-# Stub — fully defined in Story 4.1 (includes RollingUpdate strategy + HPA for promotion-service)
++# Master: mirror Stage registry/repo pattern — pipeline passes `--set image.tag=<7-char-sha>` via deployToNamespace.
++# HPA manifests render only when env=master and autoscaling.enabled (see templates/hpa.yaml).
+ image:
+   repository: docker-registry:5000/circleguard-promotion-service
+   tag: "master"
+-  pullPolicy: IfNotPresent
++  pullPolicy: Always
++
++service:
++  port: 8088
+ 
+ env: master
+ replicaCount: 2
++resources:
++  requests:
++    cpu: 100m
++    memory: 256Mi
++
++autoscaling:
++  enabled: true
++  minReplicas: 2
++  maxReplicas: 10
++  targetCPUUtilizationPercentage: 70
+diff --git a/k8s/charts/circleguard-promotion-service/values-stage.yaml b/k8s/charts/circleguard-promotion-service/values-stage.yaml
+index 099c3c8..ef7d4ae 100644
+--- a/k8s/charts/circleguard-promotion-service/values-stage.yaml
++++ b/k8s/charts/circleguard-promotion-service/values-stage.yaml
+@@ -1,8 +1,11 @@
+-# Stub — fully defined in Story 3.1
++# See circleguard-gateway-service/values-stage.yaml for registry alignment notes.
+ image:
+   repository: docker-registry:5000/circleguard-promotion-service
+   tag: "stage"
+-  pullPolicy: IfNotPresent
++  pullPolicy: Always
++
++service:
++  port: 8088
+ 
+ env: stage
+ replicaCount: 1
+diff --git a/k8s/charts/circleguard-promotion-service/values.yaml b/k8s/charts/circleguard-promotion-service/values.yaml
+index 6f663ca..8a563f6 100644
+--- a/k8s/charts/circleguard-promotion-service/values.yaml
++++ b/k8s/charts/circleguard-promotion-service/values.yaml
+@@ -11,3 +11,9 @@ service:
+ 
+ env: dev
+ resources: {}
++
++autoscaling:
++  enabled: false
++  minReplicas: 2
++  maxReplicas: 10
++  targetCPUUtilizationPercentage: 70
+diff --git a/services/circleguard-auth-service/build.gradle.kts b/services/circleguard-auth-service/build.gradle.kts
+index 71a4f45..68013a1 100644
+--- a/services/circleguard-auth-service/build.gradle.kts
++++ b/services/circleguard-auth-service/build.gradle.kts
+@@ -6,6 +6,8 @@ plugins {
+     kotlin("plugin.jpa")
+ }
+ 
++apply(from = rootProject.file("gradle/java-integration-test.gradle"))
++
+ dependencies {
+     implementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+     testImplementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+@@ -23,6 +25,12 @@ dependencies {
+     testImplementation("org.springframework.boot:spring-boot-starter-test")
+     testImplementation("org.springframework.security:spring-security-test")
+     testImplementation(project(":test-support"))
++
++    "integrationTestImplementation"("org.springframework.boot:spring-boot-starter-test")
++    "integrationTestImplementation"("org.springframework.security:spring-security-test")
++    "integrationTestImplementation"("org.testcontainers:junit-jupiter:1.19.3")
++    "integrationTestImplementation"("org.testcontainers:postgresql:1.19.3")
++    "integrationTestImplementation"(project(":test-support"))
+ }
+ 
+ tasks.jar { enabled = false }
+diff --git a/services/circleguard-auth-service/src/main/java/com/circleguard/auth/client/IdentityClient.java b/services/circleguard-auth-service/src/main/java/com/circleguard/auth/client/IdentityClient.java
+index 5ab0986..3562927 100644
+--- a/services/circleguard-auth-service/src/main/java/com/circleguard/auth/client/IdentityClient.java
++++ b/services/circleguard-auth-service/src/main/java/com/circleguard/auth/client/IdentityClient.java
+@@ -1,18 +1,31 @@
+ package com.circleguard.auth.client;
+ 
++import org.springframework.beans.factory.annotation.Value;
+ import org.springframework.stereotype.Component;
+ import org.springframework.web.client.RestTemplate;
+-import java.util.*;
++
++import java.util.Map;
++import java.util.UUID;
+ 
+ @Component
+ public class IdentityClient {
+-    // In a real microservice, this would use Feign or WebClient
++
+     private final RestTemplate restTemplate = new RestTemplate();
+-    private static final String IDENTITY_URL = "http://localhost:8083/api/v1/identities/map";
++
++    @Value("${circleguard.identity.map-url:http://localhost:8083/api/v1/identities/map}")
++    private String identityMapUrl;
+ 
+     public UUID getAnonymousId(String realIdentity) {
+         Map<String, String> request = Map.of("realIdentity", realIdentity);
+-        Map response = restTemplate.postForObject(IDENTITY_URL, request, Map.class);
+-        return UUID.fromString(response.get("anonymousId").toString());
++        @SuppressWarnings("unchecked")
++        Map<String, Object> response = restTemplate.postForObject(identityMapUrl, request, Map.class);
++        if (response == null || response.get("anonymousId") == null) {
++            throw new IllegalStateException("identity /map returned no anonymousId");
++        }
++        Object raw = response.get("anonymousId");
++        if (raw instanceof UUID uuid) {
++            return uuid;
++        }
++        return UUID.fromString(raw.toString());
+     }
+ }
+diff --git a/services/circleguard-auth-service/src/test/java/com/circleguard/auth/controller/LoginControllerTest.java b/services/circleguard-auth-service/src/test/java/com/circleguard/auth/controller/LoginControllerTest.java
+index 45e605c..f3b152e 100644
+--- a/services/circleguard-auth-service/src/test/java/com/circleguard/auth/controller/LoginControllerTest.java
++++ b/services/circleguard-auth-service/src/test/java/com/circleguard/auth/controller/LoginControllerTest.java
+@@ -4,6 +4,7 @@ import com.circleguard.auth.client.IdentityClient;
+ import com.circleguard.auth.service.JwtTokenService;
+ import com.circleguard.auth.service.CustomUserDetailsService;
+ import com.circleguard.auth.security.SecurityConfig;
++import com.circleguard.test.TestDataBuilder;
+ import org.junit.jupiter.api.Test;
+ import org.springframework.context.annotation.Import;
+ import org.mockito.Mockito;
+@@ -42,9 +43,9 @@ public class LoginControllerTest {
+ 
+     @Test
+     void shouldLoginSuccessfullyAndReturnAnonymizedToken() throws Exception {
+-        String username = "testuser";
+-        String password = "password123";
+-        UUID anonymousId = UUID.randomUUID();
++        String username = "synthetic-login-a";
++        String password = "pw";
++        UUID anonymousId = TestDataBuilder.randomAnonymousId();
+         String token = "mock-jwt-token";
+ 
+         Authentication auth = Mockito.mock(Authentication.class);
+@@ -58,7 +59,7 @@ public class LoginControllerTest {
+ 
+         mockMvc.perform(post("/api/v1/auth/login")
+                 .contentType(MediaType.APPLICATION_JSON)
+-                .content("{\"username\": \"testuser\", \"password\": \"password123\"}"))
++                .content("{\"username\": \"synthetic-login-a\", \"password\": \"pw\"}"))
+                 .andExpect(status().isOk())
+                 .andExpect(jsonPath("$.token").value(token))
+                 .andExpect(jsonPath("$.anonymousId").value(anonymousId.toString()))
+diff --git a/services/circleguard-form-service/build.gradle.kts b/services/circleguard-form-service/build.gradle.kts
+index 1dc828e..e9511a2 100644
+--- a/services/circleguard-form-service/build.gradle.kts
++++ b/services/circleguard-form-service/build.gradle.kts
+@@ -6,6 +6,8 @@ plugins {
+     kotlin("plugin.jpa")
+ }
+ 
++apply(from = rootProject.file("gradle/java-integration-test.gradle"))
++
+ dependencies {
+     implementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+     testImplementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+@@ -17,6 +19,12 @@ dependencies {
+     runtimeOnly("org.postgresql:postgresql")
+     testImplementation("org.springframework.boot:spring-boot-starter-test")
+     testImplementation(project(":test-support"))
++
++    "integrationTestImplementation"("org.springframework.boot:spring-boot-starter-test")
++    "integrationTestImplementation"("org.testcontainers:junit-jupiter:1.19.3")
++    "integrationTestImplementation"("org.testcontainers:kafka:1.19.3")
++    "integrationTestImplementation"("org.testcontainers:postgresql:1.19.3")
++    "integrationTestImplementation"(project(":test-support"))
+ }
+ 
+ tasks.jar { enabled = false }
+diff --git a/services/circleguard-form-service/src/main/java/com/circleguard/form/repository/QuestionnaireRepository.java b/services/circleguard-form-service/src/main/java/com/circleguard/form/repository/QuestionnaireRepository.java
+index a4f2a3d..65365b9 100644
+--- a/services/circleguard-form-service/src/main/java/com/circleguard/form/repository/QuestionnaireRepository.java
++++ b/services/circleguard-form-service/src/main/java/com/circleguard/form/repository/QuestionnaireRepository.java
+@@ -1,10 +1,12 @@
+ package com.circleguard.form.repository;
+ 
+ import com.circleguard.form.model.Questionnaire;
++import org.springframework.data.jpa.repository.EntityGraph;
+ import org.springframework.data.jpa.repository.JpaRepository;
+ import java.util.Optional;
+ import java.util.UUID;
+ 
+ public interface QuestionnaireRepository extends JpaRepository<Questionnaire, UUID> {
++    @EntityGraph(attributePaths = "questions")
+     Optional<Questionnaire> findFirstByIsActiveTrueOrderByVersionDesc();
+ }
+diff --git a/services/circleguard-gateway-service/build.gradle.kts b/services/circleguard-gateway-service/build.gradle.kts
+index 75d6d58..6600cd3 100644
+--- a/services/circleguard-gateway-service/build.gradle.kts
++++ b/services/circleguard-gateway-service/build.gradle.kts
+@@ -5,17 +5,27 @@ plugins {
+     kotlin("plugin.spring")
+ }
+ 
++apply(from = rootProject.file("gradle/java-integration-test.gradle"))
++
+ dependencies {
+     implementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+     testImplementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+ 
+     implementation("org.springframework.boot:spring-boot-starter-web")
++    implementation("org.springframework.boot:spring-boot-starter-security")
+     implementation("org.springframework.boot:spring-boot-starter-data-redis")
+     implementation("io.jsonwebtoken:jjwt-api:0.11.5")
+     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.11.5")
+     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.11.5")
+     testImplementation("org.springframework.boot:spring-boot-starter-test")
++    testImplementation("org.springframework.security:spring-security-test")
+     testImplementation(project(":test-support"))
++
++    "integrationTestImplementation"("org.springframework.boot:spring-boot-starter-test")
++    "integrationTestImplementation"("org.springframework.security:spring-security-test")
++    "integrationTestImplementation"("org.testcontainers:junit-jupiter:1.19.3")
++    "integrationTestImplementation"("org.testcontainers:testcontainers:1.19.3")
++    "integrationTestImplementation"(project(":test-support"))
+ }
+ 
+ tasks.jar { enabled = false }
+diff --git a/services/circleguard-gateway-service/src/test/java/com/circleguard/gateway/controller/GateControllerTest.java b/services/circleguard-gateway-service/src/test/java/com/circleguard/gateway/controller/GateControllerTest.java
+index 2d5f97c..833f4c7 100644
+--- a/services/circleguard-gateway-service/src/test/java/com/circleguard/gateway/controller/GateControllerTest.java
++++ b/services/circleguard-gateway-service/src/test/java/com/circleguard/gateway/controller/GateControllerTest.java
+@@ -4,6 +4,7 @@ import com.circleguard.gateway.service.QrValidationService;
+ import org.junit.jupiter.api.Test;
+ import org.mockito.Mockito;
+ import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration;
+ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+ import org.springframework.boot.test.mock.mockito.MockBean;
+ import org.springframework.http.MediaType;
+@@ -12,7 +13,9 @@ import org.springframework.test.web.servlet.MockMvc;
+ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+ 
+-@WebMvcTest(GateController.class)
++@WebMvcTest(
++        controllers = GateController.class,
++        excludeAutoConfiguration = SecurityAutoConfiguration.class)
+ public class GateControllerTest {
+ 
+     @Autowired
+@@ -36,4 +39,17 @@ public class GateControllerTest {
+                 .andExpect(jsonPath("$.valid").value(true))
+                 .andExpect(jsonPath("$.status").value("GREEN"));
+     }
++
++    @Test
++    void shouldReturnInvalidWhenTokenMissing() throws Exception {
++        Mockito.when(validationService.validateToken(null))
++                .thenReturn(new QrValidationService.ValidationResult(false, "RED", "Invalid or Expired Token"));
++
++        mockMvc.perform(post("/api/v1/gate/validate")
++                        .contentType(MediaType.APPLICATION_JSON)
++                        .content("{}"))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.valid").value(false))
++                .andExpect(jsonPath("$.status").value("RED"));
++    }
+ }
+diff --git a/services/circleguard-gateway-service/src/test/java/com/circleguard/gateway/service/QrValidationServiceTest.java b/services/circleguard-gateway-service/src/test/java/com/circleguard/gateway/service/QrValidationServiceTest.java
+index df2dfc7..b9ad34f 100644
+--- a/services/circleguard-gateway-service/src/test/java/com/circleguard/gateway/service/QrValidationServiceTest.java
++++ b/services/circleguard-gateway-service/src/test/java/com/circleguard/gateway/service/QrValidationServiceTest.java
+@@ -1,5 +1,6 @@
+ package com.circleguard.gateway.service;
+ 
++import com.circleguard.test.TestDataBuilder;
+ import io.jsonwebtoken.Jwts;
+ import io.jsonwebtoken.SignatureAlgorithm;
+ import io.jsonwebtoken.security.Keys;
+@@ -11,7 +12,6 @@ import org.springframework.data.redis.core.ValueOperations;
+ import org.springframework.test.util.ReflectionTestUtils;
+ 
+ import java.security.Key;
+-import java.util.UUID;
+ 
+ import static org.junit.jupiter.api.Assertions.*;
+ 
+@@ -34,7 +34,7 @@ public class QrValidationServiceTest {
+ 
+     @Test
+     void shouldValidateCorrectTokenAndAllowAccess() {
+-        String anonymousId = UUID.randomUUID().toString();
++        String anonymousId = TestDataBuilder.randomAnonymousId().toString();
+         Key key = Keys.hmacShaKeyFor(secret.getBytes());
+         String token = Jwts.builder()
+                 .setSubject(anonymousId)
+@@ -51,7 +51,7 @@ public class QrValidationServiceTest {
+ 
+     @Test
+     void shouldDenyAccessForContagiedUser() {
+-        String anonymousId = UUID.randomUUID().toString();
++        String anonymousId = TestDataBuilder.randomAnonymousId().toString();
+         Key key = Keys.hmacShaKeyFor(secret.getBytes());
+         String token = Jwts.builder()
+                 .setSubject(anonymousId)
+@@ -65,4 +65,34 @@ public class QrValidationServiceTest {
+         assertFalse(result.valid());
+         assertEquals("RED", result.status());
+     }
++
++    @Test
++    void shouldRejectMalformedJwt() {
++        QrValidationService.ValidationResult result = service.validateToken("not-a-valid-jwt");
++        assertFalse(result.valid());
++        assertEquals("RED", result.status());
++    }
++
++    @Test
++    void shouldRejectNullToken() {
++        QrValidationService.ValidationResult result = service.validateToken(null);
++        assertFalse(result.valid());
++        assertEquals("RED", result.status());
++    }
++
++    @Test
++    void shouldDenyAccessForPotentialUser() {
++        String anonymousId = TestDataBuilder.randomAnonymousId().toString();
++        Key key = Keys.hmacShaKeyFor(secret.getBytes());
++        String token = Jwts.builder()
++                .setSubject(anonymousId)
++                .signWith(key, SignatureAlgorithm.HS256)
++                .compact();
++
++        Mockito.when(valueOps.get("user:status:" + anonymousId)).thenReturn("POTENTIAL");
++
++        QrValidationService.ValidationResult result = service.validateToken(token);
++        assertFalse(result.valid());
++        assertEquals("RED", result.status());
++    }
+ }
+diff --git a/services/circleguard-identity-service/build.gradle.kts b/services/circleguard-identity-service/build.gradle.kts
+index a4cf429..54f017f 100644
+--- a/services/circleguard-identity-service/build.gradle.kts
++++ b/services/circleguard-identity-service/build.gradle.kts
+@@ -6,6 +6,8 @@ plugins {
+     kotlin("plugin.jpa")
+ }
+ 
++apply(from = rootProject.file("gradle/java-integration-test.gradle"))
++
+ dependencies {
+     implementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+     testImplementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+@@ -24,6 +26,12 @@ dependencies {
+     testImplementation("org.springframework.kafka:spring-kafka-test")
+     testImplementation("org.springframework.security:spring-security-test")
+     testImplementation(project(":test-support"))
++
++    "integrationTestImplementation"("org.springframework.boot:spring-boot-starter-test")
++    "integrationTestImplementation"("org.springframework.security:spring-security-test")
++    "integrationTestImplementation"("org.testcontainers:junit-jupiter:1.19.3")
++    "integrationTestImplementation"("org.testcontainers:postgresql:1.19.3")
++    "integrationTestImplementation"(project(":test-support"))
+ }
+ 
+ tasks.jar { enabled = false }
+diff --git a/services/circleguard-identity-service/src/test/java/com/circleguard/identity/repository/IdentityMappingRepositoryTest.java b/services/circleguard-identity-service/src/test/java/com/circleguard/identity/repository/IdentityMappingRepositoryTest.java
+index 319a9ea..9bb0462 100644
+--- a/services/circleguard-identity-service/src/test/java/com/circleguard/identity/repository/IdentityMappingRepositoryTest.java
++++ b/services/circleguard-identity-service/src/test/java/com/circleguard/identity/repository/IdentityMappingRepositoryTest.java
+@@ -1,6 +1,7 @@
+ package com.circleguard.identity.repository;
+ 
+ import com.circleguard.identity.model.IdentityMapping;
++import com.circleguard.test.TestDataBuilder;
+ import org.junit.jupiter.api.Test;
+ import org.springframework.beans.factory.annotation.Autowired;
+ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+@@ -8,7 +9,6 @@ import org.springframework.test.context.ActiveProfiles;
+ import org.springframework.transaction.annotation.Transactional;
+ 
+ import java.util.Optional;
+-import java.util.UUID;
+ 
+ import static org.junit.jupiter.api.Assertions.*;
+ 
+@@ -23,8 +23,8 @@ class IdentityMappingRepositoryTest {
+     @Test
+     void shouldSaveAndRetrieveWithAutomaticEncryption() {
+         IdentityMapping mapping = IdentityMapping.builder()
+-                .realIdentity("test-user")
+-                .anonymousId(UUID.randomUUID())
++                .realIdentity("synthetic-vault-handle-alpha")
++                .anonymousId(TestDataBuilder.randomAnonymousId())
+                 .identityHash("hash123")
+                 .salt("salt123")
+                 .build();
+@@ -37,18 +37,18 @@ class IdentityMappingRepositoryTest {
+         repository.flush();
+         
+         IdentityMapping found = repository.findById(saved.getAnonymousId()).orElseThrow();
+-        assertEquals("test-user", found.getRealIdentity());
++        assertEquals("synthetic-vault-handle-alpha", found.getRealIdentity());
+     }
+ 
+     @Test
+     void shouldFindMappingByIdentityHash() {
+-        String realIdentity = "user@example.com";
++        String realIdentity = "synthetic-vault-token-beta";
+         String hash = "hash123";
+         String salt = "salt456";
+         
+         IdentityMapping mapping = IdentityMapping.builder()
+                 .realIdentity(realIdentity)
+-                .anonymousId(UUID.randomUUID())
++                .anonymousId(TestDataBuilder.randomAnonymousId())
+                 .identityHash(hash)
+                 .salt(salt)
+                 .build();
+diff --git a/services/circleguard-notification-service/build.gradle.kts b/services/circleguard-notification-service/build.gradle.kts
+index 36bfe9a..51b623e 100644
+--- a/services/circleguard-notification-service/build.gradle.kts
++++ b/services/circleguard-notification-service/build.gradle.kts
+@@ -5,6 +5,8 @@ plugins {
+     kotlin("plugin.spring")
+ }
+ 
++apply(from = rootProject.file("gradle/java-integration-test.gradle"))
++
+ dependencies {
+     implementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+     testImplementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+@@ -21,6 +23,11 @@ dependencies {
+     annotationProcessor("org.projectlombok:lombok")
+     testImplementation("org.springframework.boot:spring-boot-starter-test")
+     testImplementation(project(":test-support"))
++
++    "integrationTestImplementation"("org.springframework.boot:spring-boot-starter-test")
++    "integrationTestImplementation"("org.testcontainers:junit-jupiter:1.19.3")
++    "integrationTestImplementation"("org.testcontainers:kafka:1.19.3")
++    "integrationTestImplementation"(project(":test-support"))
+ }
+ 
+ tasks.jar { enabled = false }
+diff --git a/services/circleguard-promotion-service/build.gradle.kts b/services/circleguard-promotion-service/build.gradle.kts
+index 6120ef9..580a1a1 100644
+--- a/services/circleguard-promotion-service/build.gradle.kts
++++ b/services/circleguard-promotion-service/build.gradle.kts
+@@ -6,6 +6,8 @@ plugins {
+     kotlin("plugin.jpa")
+ }
+ 
++apply(from = rootProject.file("gradle/java-integration-test.gradle"))
++
+ dependencies {
+     implementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+     testImplementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+@@ -26,10 +28,16 @@ dependencies {
+     runtimeOnly("org.postgresql:postgresql")
+     testImplementation("org.springframework.boot:spring-boot-starter-test")
+     testImplementation("org.springframework.security:spring-security-test")
+-    testImplementation("org.testcontainers:junit-jupiter:1.19.3")
+-    testImplementation("org.testcontainers:postgresql:1.19.3")
+-    testImplementation("org.testcontainers:neo4j:1.19.3")
+     testImplementation(project(":test-support"))
++
++    "integrationTestImplementation"("org.springframework.boot:spring-boot-starter-test")
++    "integrationTestImplementation"("org.springframework.security:spring-security-test")
++    "integrationTestImplementation"("org.testcontainers:junit-jupiter:1.19.3")
++    "integrationTestImplementation"("org.testcontainers:postgresql:1.19.3")
++    "integrationTestImplementation"("org.testcontainers:neo4j:1.19.3")
++    "integrationTestImplementation"("org.testcontainers:kafka:1.19.3")
++    "integrationTestImplementation"("org.testcontainers:testcontainers:1.19.3")
++    "integrationTestImplementation"(project(":test-support"))
+ }
+ 
+ tasks.jar { enabled = false }
+diff --git a/services/circleguard-promotion-service/src/main/java/com/circleguard/promotion/listener/SurveyListener.java b/services/circleguard-promotion-service/src/main/java/com/circleguard/promotion/listener/SurveyListener.java
+index b58a1f3..54274ec 100644
+--- a/services/circleguard-promotion-service/src/main/java/com/circleguard/promotion/listener/SurveyListener.java
++++ b/services/circleguard-promotion-service/src/main/java/com/circleguard/promotion/listener/SurveyListener.java
+@@ -18,10 +18,14 @@ public class SurveyListener {
+         log.info("Received survey submission event: {}", event);
+         
+         try {
+-            String anonymousId = (String) event.get("anonymousId");
+-            Boolean hasSymptoms = (Boolean) event.get("hasSymptoms");
+-            
+-            if (anonymousId != null && Boolean.TRUE.equals(hasSymptoms)) {
++            Object rawId = event.get("anonymousId");
++            String anonymousId = rawId == null ? null : rawId.toString();
++            Object rawSymptoms = event.get("hasSymptoms");
++            boolean hasSymptoms =
++                    Boolean.TRUE.equals(rawSymptoms)
++                            || "true".equalsIgnoreCase(String.valueOf(rawSymptoms));
++
++            if (anonymousId != null && hasSymptoms) {
+                 log.info("Promoting user {} to SUSPECT due to symptoms", anonymousId);
+                 healthStatusService.updateStatus(anonymousId, "SUSPECT");
+             }
+@@ -35,9 +39,11 @@ public class SurveyListener {
+         log.info("Received certificate validation event: {}", event);
+         
+         try {
+-            String anonymousId = (String) event.get("anonymousId");
+-            String status = (String) event.get("status");
+-            
++            Object rawId = event.get("anonymousId");
++            String anonymousId = rawId == null ? null : rawId.toString();
++            Object rawStatus = event.get("status");
++            String status = rawStatus == null ? null : rawStatus.toString();
++
+             if (anonymousId != null && "APPROVED".equals(status)) {
+                 log.info("Restoring user {} to ACTIVE due to approved certificate", anonymousId);
+                 healthStatusService.updateStatus(anonymousId, "ACTIVE");
+diff --git a/services/circleguard-promotion-service/src/main/java/com/circleguard/promotion/service/HealthStatusService.java b/services/circleguard-promotion-service/src/main/java/com/circleguard/promotion/service/HealthStatusService.java
+index 70245b2..f472ccf 100644
+--- a/services/circleguard-promotion-service/src/main/java/com/circleguard/promotion/service/HealthStatusService.java
++++ b/services/circleguard-promotion-service/src/main/java/com/circleguard/promotion/service/HealthStatusService.java
+@@ -93,6 +93,17 @@ public class HealthStatusService {
+                 .bind(threshold).to("threshold")
+                 .fetch().one();
+ 
++        // Isolated users: OPTIONAL MATCH yields c1=NULL, WHERE c1 IS NOT NULL eliminates all rows, so RETURN
++        // never runs—but the initial SET on source still applied. Re-fetch synthetic row so Redis/Kafka run.
++        if (result.isEmpty()) {
++            result = neo4jClient.query(
++                    "MATCH (source:User {anonymousId: $id}) WHERE source.status = $status "
++                            + "RETURN source.anonymousId AS sourceId, [] AS affectedContacts")
++                    .bind(anonymousId).to("id")
++                    .bind(status).to("status")
++                    .fetch().one();
++        }
++
+         if (result.isPresent()) {
+             Map<String, String> cacheUpdates = new HashMap<>();
+             cacheUpdates.put(STATUS_KEY_PREFIX + anonymousId, status);
+diff --git a/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/performance/PromotionPerformanceTest.java b/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/performance/PromotionPerformanceTest.java
+deleted file mode 100644
+index b82c650..0000000
+--- a/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/performance/PromotionPerformanceTest.java
++++ /dev/null
+@@ -1,145 +0,0 @@
+-package com.circleguard.promotion.performance;
+-
+-import com.circleguard.promotion.service.HealthStatusService;
+-import org.junit.jupiter.api.BeforeEach;
+-import org.junit.jupiter.api.Test;
+-import org.springframework.beans.factory.annotation.Autowired;
+-import org.springframework.boot.test.context.SpringBootTest;
+-import org.springframework.boot.test.mock.mockito.MockBean;
+-import org.springframework.data.neo4j.core.Neo4jClient;
+-import org.springframework.kafka.core.KafkaTemplate;
+-import org.springframework.test.context.ActiveProfiles;
+-import org.springframework.test.context.DynamicPropertyRegistry;
+-import org.springframework.test.context.DynamicPropertySource;
+-import org.testcontainers.containers.GenericContainer;
+-import org.testcontainers.containers.Neo4jContainer;
+-import org.testcontainers.containers.PostgreSQLContainer;
+-import org.testcontainers.junit.jupiter.Container;
+-import org.testcontainers.junit.jupiter.Testcontainers;
+-
+-import java.util.UUID;
+-
+-import static org.junit.jupiter.api.Assertions.assertTrue;
+-
+-@SpringBootTest
+-@ActiveProfiles("test")
+-@Testcontainers
+-public class PromotionPerformanceTest {
+-
+-    @Container
+-    static Neo4jContainer<?> neo4jContainer = new Neo4jContainer<>("neo4j:5.12")
+-            .withAdminPassword("password");
+-
+-    @Container
+-    static GenericContainer<?> redis = new GenericContainer<>("redis:7.2.1")
+-            .withExposedPorts(6379);
+-
+-    @Container
+-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15.4")
+-            .withDatabaseName("testdb")
+-            .withUsername("testuser")
+-            .withPassword("testpassword");
+-
+-    @DynamicPropertySource
+-    static void neo4jProperties(DynamicPropertyRegistry registry) {
+-        registry.add("spring.neo4j.uri", neo4jContainer::getBoltUrl);
+-        registry.add("spring.neo4j.authentication.username", () -> "neo4j");
+-        registry.add("spring.neo4j.authentication.password", () -> "password");
+-        registry.add("spring.data.redis.host", redis::getHost);
+-        registry.add("spring.data.redis.port", redis::getFirstMappedPort);
+-        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+-        registry.add("spring.datasource.username", postgres::getUsername);
+-        registry.add("spring.datasource.password", postgres::getPassword);
+-        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
+-    }
+-
+-    @Autowired
+-    private HealthStatusService healthStatusService;
+-
+-    @MockBean
+-    private KafkaTemplate<String, Object> kafkaTemplate;
+-
+-    @Autowired
+-    private Neo4jClient neo4jClient;
+-
+-    private String rootUser;
+-
+-    @BeforeEach
+-    void setupBenchmarkData() {
+-        // Clear graph
+-        neo4jClient.query("MATCH (n) DETACH DELETE n").run();
+-
+-        // Create 10,000 nodes and random contacts
+-        rootUser = UUID.randomUUID().toString();
+-        
+-        // 1. Create root user
+-        neo4jClient.query("CREATE (:User {anonymousId: $id, status: 'ACTIVE'})")
+-                .bind(rootUser).to("id").run();
+-
+-        // 2. Create 10,000 secondary nodes in batches for performance
+-        // This is a simplified scale model for benchmarking
+-        neo4jClient.query("UNWIND range(1, 10000) as i " +
+-                "CREATE (u:User {anonymousId: 'user-' + toString(i), status: 'ACTIVE'})")
+-                .run();
+-
+-        // 3. Connect root to a subset (Realistic average)
+-        neo4jClient.query("MATCH (root:User {anonymousId: $id}), (others:User) " +
+-                "WHERE others.anonymousId <> $id " +
+-                "WITH root, others LIMIT 50 " +
+-                "CREATE (root)-[:ENCOUNTERED {startTime: timestamp()}]->(others)")
+-                .bind(rootUser).to("id")
+-                .run();
+-                
+-        // Connect others in a chain/mesh (Realistic density)
+-        neo4jClient.query("MATCH (u1:User), (u2:User) " +
+-                "WHERE u1.anonymousId <> u2.anonymousId AND rand() < 0.001 " +
+-                "WITH u1, u2 LIMIT 15000 " +
+-                "CREATE (u1)-[:ENCOUNTERED {startTime: timestamp()}]->(u2)")
+-                .run();
+-    }
+-
+-    @Test
+-    void benchmarkPromotionPerformance() {
+-        System.out.println("Starting Promotion Benchmark...");
+-        
+-        // --- Warmup Phase ---
+-        // Perform a small promotion to warm up indices and JIT
+-        String warmupUser = "user-1"; 
+-        healthStatusService.updateStatus(warmupUser, "CONFIRMED");
+-        System.out.println("Warmup phase complete.");
+-        
+-        // --- Main Benchmark ---
+-        long startTime = System.currentTimeMillis();
+-        
+-        // Trigger promotion on rootUser (affects 10,000 node cluster)
+-        healthStatusService.updateStatus(rootUser, "CONFIRMED");
+-        
+-        long endTime = System.currentTimeMillis();
+-        long duration = endTime - startTime;
+-        
+-        System.out.println("==========================================");
+-        System.out.println("TOTAL DURATION: " + duration + "ms");
+-        System.out.println("==========================================");
+-        
+-        // NFR-1 target is <1000ms in production. CI/Testcontainers environments have Docker overhead,
+-        // so the threshold here is relaxed to 30s to catch catastrophic regressions only.
+-        assertTrue(duration < 30000, "Promotion cascade exceeded 30 second CI threshold. Actual: " + duration + "ms");
+-
+-        // --- Multi-Tier Validation ---
+-        // Verify L1 promotion (SUSPECT)
+-        Long suspectCount = neo4jClient.query("MATCH (root:User {anonymousId: $id})-[:ENCOUNTERED]-(c1:User) " +
+-                "WHERE c1.status = 'SUSPECT' RETURN count(c1) as count")
+-                .bind(rootUser).to("id")
+-                .fetchAs(Long.class).one().get();
+-        System.out.println("L1 SUSPECT COUNT: " + suspectCount);
+-        assertTrue(suspectCount > 0, "No L1 contacts were promoted to SUSPECT");
+-
+-        // Verify L2 promotion (PROBABLE)
+-        Long probableCount = neo4jClient.query("MATCH (root:User {anonymousId: $id})-[:ENCOUNTERED]-(c1)-[:ENCOUNTERED]-(c2:User) " +
+-                "WHERE c2.status = 'PROBABLE' AND c2.anonymousId <> root.anonymousId RETURN count(c2) as count")
+-                .bind(rootUser).to("id")
+-                .fetchAs(Long.class).one().get();
+-        System.out.println("L2 PROBABLE COUNT: " + probableCount);
+-        assertTrue(probableCount > 0, "No L2 contacts were promoted to PROBABLE");
+-    }
+-}
+diff --git a/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/AdministrativeCorrectionTest.java b/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/AdministrativeCorrectionTest.java
+deleted file mode 100644
+index bcc9c2a..0000000
+--- a/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/AdministrativeCorrectionTest.java
++++ /dev/null
+@@ -1,125 +0,0 @@
+-package com.circleguard.promotion.service;
+-
+-import com.circleguard.promotion.model.graph.CircleNode;
+-import com.circleguard.promotion.model.graph.UserNode;
+-import com.circleguard.promotion.repository.graph.CircleNodeRepository;
+-import com.circleguard.promotion.repository.graph.UserNodeRepository;
+-import org.junit.jupiter.api.BeforeEach;
+-import org.junit.jupiter.api.Test;
+-import org.springframework.beans.factory.annotation.Autowired;
+-import org.springframework.boot.test.context.SpringBootTest;
+-import org.springframework.boot.test.mock.mockito.MockBean;
+-import org.springframework.kafka.core.KafkaTemplate;
+-import org.springframework.test.context.ActiveProfiles;
+-import org.springframework.test.context.DynamicPropertyRegistry;
+-import org.springframework.test.context.DynamicPropertySource;
+-import org.testcontainers.containers.GenericContainer;
+-import org.testcontainers.containers.Neo4jContainer;
+-import org.testcontainers.containers.PostgreSQLContainer;
+-import org.testcontainers.junit.jupiter.Container;
+-import org.testcontainers.junit.jupiter.Testcontainers;
+-
+-import static org.assertj.core.api.Assertions.assertThat;
+-
+-@SpringBootTest
+-@ActiveProfiles("test")
+-@Testcontainers
+-public class AdministrativeCorrectionTest {
+-
+-    @Container
+-    static Neo4jContainer<?> neo4j = new Neo4jContainer<>("neo4j:5.12.0")
+-            .withAdminPassword("password");
+-
+-    @Container
+-    static GenericContainer<?> redis = new GenericContainer<>("redis:7.2.1")
+-            .withExposedPorts(6379);
+-
+-    @Container
+-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15.4")
+-            .withDatabaseName("testdb")
+-            .withUsername("testuser")
+-            .withPassword("testpassword");
+-
+-    @DynamicPropertySource
+-    static void properties(DynamicPropertyRegistry registry) {
+-        registry.add("spring.neo4j.uri", neo4j::getBoltUrl);
+-        registry.add("spring.neo4j.authentication.username", () -> "neo4j");
+-        registry.add("spring.neo4j.authentication.password", () -> "password");
+-        registry.add("spring.data.redis.host", redis::getHost);
+-        registry.add("spring.data.redis.port", redis::getFirstMappedPort);
+-        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+-        registry.add("spring.datasource.username", postgres::getUsername);
+-        registry.add("spring.datasource.password", postgres::getPassword);
+-        // Let Hibernate create schema in the fresh Testcontainers database
+-        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
+-    }
+-
+-    @Autowired
+-    private HealthStatusService statusService;
+-
+-    @Autowired
+-    private CircleService circleService;
+-
+-    @Autowired
+-    private UserNodeRepository userRepository;
+-
+-    @Autowired
+-    private CircleNodeRepository circleRepository;
+-
+-    @MockBean
+-    private KafkaTemplate<String, Object> kafkaTemplate;
+-
+-    @BeforeEach
+-    void setup() {
+-        circleRepository.deleteAll();
+-        userRepository.deleteAll();
+-    }
+-
+-    @Test
+-    void invalidateCircle_PreventsPropagation() {
+-        // 1. Setup: A -> Circle (Invalid) -> B
+-        UserNode a = UserNode.builder().anonymousId("A").status("ACTIVE").build();
+-        UserNode b = UserNode.builder().anonymousId("B").status("ACTIVE").build();
+-        userRepository.save(a);
+-        userRepository.save(b);
+-
+-        CircleNode circle = circleService.createCircle("RiskGroup", "loc1");
+-        userRepository.recordEncounter("A", "B", System.currentTimeMillis(), "loc1"); // Backdoor encounter
+-        // Wait, I'll use the circle membership
+-        circleRepository.joinCircle("A", circle.getInviteCode());
+-        circleRepository.joinCircle("B", circle.getInviteCode());
+-
+-        // Invalidate circle
+-        circleService.toggleCircleValidity(circle.getId());
+-
+-        // 2. Action: Purge encounters to isolate circle test, then promote A
+-        userRepository.purgeStaleEncounters(System.currentTimeMillis() + 10000); 
+-        statusService.updateStatus("A", "CONFIRMED");
+-
+-        // 3. Verify: B should NOT be affected through the invalid circle
+-        statusService.getCachedStatus("B");
+-        // Since circle is invalid, B remains ACTIVE (unless updateStatus is called)
+-        // Wait, updateStatus only returns affected. Let's check DB.
+-        assertThat(userRepository.findById("B").get().getStatus()).isEqualTo("ACTIVE");
+-    }
+-
+-    @Test
+-    void forceFence_PromotesAllMembers() {
+-        // 1. Setup: A and B in Circle
+-        UserNode a = UserNode.builder().anonymousId("A").status("ACTIVE").build();
+-        UserNode b = UserNode.builder().anonymousId("B").status("ACTIVE").build();
+-        userRepository.save(a);
+-        userRepository.save(b);
+-
+-        CircleNode circle = circleService.createCircle("Forced containment", "loc2");
+-        circleRepository.joinCircle("A", circle.getInviteCode());
+-        circleRepository.joinCircle("B", circle.getInviteCode());
+-
+-        // 2. Action: Force fence
+-        circleService.forceFenceCircle(circle.getId());
+-
+-        // 3. Verify: Both should be PROBABLE
+-        assertThat(userRepository.findById("A").get().getStatus()).isEqualTo("PROBABLE");
+-        assertThat(userRepository.findById("B").get().getStatus()).isEqualTo("PROBABLE");
+-    }
+-}
+diff --git a/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/HealthStatusReevaluationTest.java b/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/HealthStatusReevaluationTest.java
+deleted file mode 100644
+index b96ce5b..0000000
+--- a/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/HealthStatusReevaluationTest.java
++++ /dev/null
+@@ -1,156 +0,0 @@
+-package com.circleguard.promotion.service;
+-
+-import org.junit.jupiter.api.BeforeEach;
+-import org.junit.jupiter.api.Test;
+-import org.springframework.beans.factory.annotation.Autowired;
+-import org.springframework.boot.test.context.SpringBootTest;
+-import org.springframework.boot.test.mock.mockito.MockBean;
+-import org.springframework.data.neo4j.core.Neo4jClient;
+-import org.springframework.kafka.core.KafkaTemplate;
+-import org.springframework.test.context.ActiveProfiles;
+-import org.springframework.test.context.DynamicPropertyRegistry;
+-import org.springframework.test.context.DynamicPropertySource;
+-import org.testcontainers.containers.GenericContainer;
+-import org.testcontainers.containers.Neo4jContainer;
+-import org.testcontainers.containers.PostgreSQLContainer;
+-import org.testcontainers.junit.jupiter.Container;
+-import org.testcontainers.junit.jupiter.Testcontainers;
+-
+-
+-import static org.junit.jupiter.api.Assertions.assertEquals;
+-
+-@SpringBootTest
+-@ActiveProfiles("test")
+-@Testcontainers
+-public class HealthStatusReevaluationTest {
+-
+-    @Container
+-    static Neo4jContainer<?> neo4jContainer = new Neo4jContainer<>("neo4j:5.12")
+-            .withAdminPassword("password");
+-
+-    @Container
+-    static GenericContainer<?> redis = new GenericContainer<>("redis:7.2.1")
+-            .withExposedPorts(6379);
+-
+-    @Container
+-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15.4")
+-            .withDatabaseName("testdb")
+-            .withUsername("testuser")
+-            .withPassword("testpassword");
+-
+-    @DynamicPropertySource
+-    static void neo4jProperties(DynamicPropertyRegistry registry) {
+-        registry.add("spring.neo4j.uri", neo4jContainer::getBoltUrl);
+-        registry.add("spring.neo4j.authentication.username", () -> "neo4j");
+-        registry.add("spring.neo4j.authentication.password", () -> "password");
+-        registry.add("spring.data.redis.host", redis::getHost);
+-        registry.add("spring.data.redis.port", redis::getFirstMappedPort);
+-        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+-        registry.add("spring.datasource.username", postgres::getUsername);
+-        registry.add("spring.datasource.password", postgres::getPassword);
+-        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
+-    }
+-
+-    @Autowired
+-    private HealthStatusService healthStatusService;
+-
+-    @Autowired
+-    private Neo4jClient neo4jClient;
+-
+-    @MockBean
+-    private KafkaTemplate<String, Object> kafkaTemplate;
+-
+-    @BeforeEach
+-    void setup() {
+-        neo4jClient.query("MATCH (n) DETACH DELETE n").run();
+-    }
+-
+-    @Test
+-    void testSingleRelease() {
+-        // A (CONFIRMED) -[r1]-> B (SUSPECT)
+-        createNode("A", "CONFIRMED");
+-        createNode("B", "SUSPECT");
+-        createRelationship("A", "B");
+-
+-        // Resolve A
+-        healthStatusService.resolveStatus("A");
+-
+-        // B should become ACTIVE
+-        assertEquals("ACTIVE", getStatus("B"));
+-    }
+-
+-    @Test
+-    void testBlockedRelease() {
+-        // A (CONFIRMED) -[r1]-> B (SUSPECT) <-[r2]- C (CONFIRMED)
+-        createNode("A", "CONFIRMED");
+-        createNode("B", "SUSPECT");
+-        createNode("C", "CONFIRMED");
+-        createRelationship("A", "B");
+-        createRelationship("C", "B");
+-
+-        // Resolve A
+-        healthStatusService.resolveStatus("A");
+-
+-        // B should stay SUSPECT because of C
+-        assertEquals("SUSPECT", getStatus("B"));
+-    }
+-
+-    @Test
+-    void testMultiHopRelease() {
+-        // A (CONFIRMED) -> B (SUSPECT) -> C (PROBABLE)
+-        createNode("A", "CONFIRMED");
+-        createNode("B", "SUSPECT");
+-        createNode("C", "PROBABLE");
+-        createRelationship("A", "B");
+-        createRelationship("B", "C");
+-
+-        // Resolve A
+-        healthStatusService.resolveStatus("A");
+-
+-        // Both B and C should become ACTIVE
+-        assertEquals("ACTIVE", getStatus("B"));
+-        assertEquals("ACTIVE", getStatus("C"));
+-    }
+-
+-    @Test
+-    void testPartialReleaseInMesh() {
+-        // A (CONFIRMED) -> B (SUSPECT) -> C (PROBABLE)
+-        // D (SUSPECT) -> C (PROBABLE)
+-        createNode("A", "CONFIRMED");
+-        createNode("B", "SUSPECT");
+-        createNode("C", "PROBABLE");
+-        createNode("D", "SUSPECT");
+-        createRelationship("A", "B");
+-        createRelationship("B", "C");
+-        createRelationship("D", "C");
+-
+-        // Resolve A
+-        healthStatusService.resolveStatus("A");
+-
+-        // B becomes ACTIVE
+-        assertEquals("ACTIVE", getStatus("B"));
+-        // C stays PROBABLE because of D
+-        assertEquals("PROBABLE", getStatus("C"));
+-    }
+-
+-    private void createNode(String id, String status) {
+-        neo4jClient.query("CREATE (:User {anonymousId: $id, status: $status})")
+-                .bind(id).to("id")
+-                .bind(status).to("status")
+-                .run();
+-    }
+-
+-    private void createRelationship(String id1, String id2) {
+-        neo4jClient.query("MATCH (u1:User {anonymousId: $id1}), (u2:User {anonymousId: $id2}) " +
+-                "CREATE (u1)-[:ENCOUNTERED {startTime: timestamp()}]->(u2)")
+-                .bind(id1).to("id1")
+-                .bind(id2).to("id2")
+-                .run();
+-    }
+-
+-    private String getStatus(String id) {
+-        return neo4jClient.query("MATCH (u:User {anonymousId: $id}) RETURN u.status as status")
+-                .bind(id).to("id")
+-                .fetchAs(String.class).one().orElse("NOT_FOUND");
+-    }
+-}
+diff --git a/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/HealthStatusServiceTest.java b/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/HealthStatusServiceTest.java
+index 5d33bdc..d5a5c3f 100644
+--- a/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/HealthStatusServiceTest.java
++++ b/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/HealthStatusServiceTest.java
+@@ -1,122 +1,144 @@
+ package com.circleguard.promotion.service;
+ 
++import com.circleguard.promotion.exception.FenceException;
++import com.circleguard.promotion.model.graph.UserNode;
++import com.circleguard.promotion.model.jpa.SystemSettings;
++import com.circleguard.promotion.repository.graph.CircleNodeRepository;
+ import com.circleguard.promotion.repository.graph.UserNodeRepository;
++import com.circleguard.promotion.repository.jpa.SystemSettingsRepository;
++import com.circleguard.test.TestDataBuilder;
++import org.junit.jupiter.api.BeforeEach;
+ import org.junit.jupiter.api.Test;
++import org.junit.jupiter.api.extension.ExtendWith;
+ import org.mockito.ArgumentMatchers;
++import org.mockito.Mock;
+ import org.mockito.Mockito;
+-import org.springframework.beans.factory.annotation.Autowired;
+-import org.springframework.boot.test.context.SpringBootTest;
+-import org.springframework.boot.test.context.TestConfiguration;
+-import org.springframework.boot.test.mock.mockito.MockBean;
+-import org.springframework.context.annotation.Bean;
+-import org.springframework.context.annotation.Primary;
++import org.mockito.junit.jupiter.MockitoExtension;
++import org.mockito.junit.jupiter.MockitoSettings;
++import org.mockito.quality.Strictness;
+ import org.springframework.data.neo4j.core.Neo4jClient;
+-import org.mockito.Mock;
+-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+ import org.springframework.data.redis.core.StringRedisTemplate;
+ import org.springframework.data.redis.core.ValueOperations;
+ import org.springframework.kafka.core.KafkaTemplate;
+-import org.springframework.test.context.ActiveProfiles;
++
++import java.util.Collections;
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.Optional;
+ 
+ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+ import static org.junit.jupiter.api.Assertions.assertThrows;
+ import static org.mockito.ArgumentMatchers.anyString;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.when;
+-import com.circleguard.promotion.exception.FenceException;
+-import com.circleguard.promotion.model.graph.UserNode;
+-import com.circleguard.promotion.model.jpa.SystemSettings;
+-import com.circleguard.promotion.repository.jpa.SystemSettingsRepository;
+-import java.util.Optional;
+ 
+-@SpringBootTest(properties = "spring.main.allow-bean-definition-overriding=true")
+-@ActiveProfiles("test")
+-@AutoConfigureMockMvc
++@ExtendWith(MockitoExtension.class)
++@MockitoSettings(strictness = Strictness.LENIENT)
+ class HealthStatusServiceTest {
+ 
+-    @TestConfiguration
+-    static class TestConfig {
+-        @Bean
+-        @Primary
+-        public org.springframework.transaction.PlatformTransactionManager transactionManager() {
+-            return Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class);
+-        }
+-
+-        @Bean(name = "neo4jTransactionManager")
+-        public org.springframework.transaction.PlatformTransactionManager neo4jTransactionManager() {
+-            return Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class);
+-        }
+-    }
++    private static final String RESOLVE_USER_ACTIVE =
++            "MATCH (u:User {anonymousId: $id}) SET u.status = 'ACTIVE', u.statusUpdatedAt = timestamp()";
++    private static final String RESOLVE_PHASE1 =
++            "MATCH (source:User {anonymousId: $id}) "
++                    + "OPTIONAL MATCH (source)-[:ENCOUNTERED|MEMBER_OF]-(target:User) "
++                    + "WHERE target.status = 'SUSPECT' "
++                    + "AND NOT EXISTS { "
++                    + "  MATCH (target)-[:ENCOUNTERED|MEMBER_OF]-(risk:User) "
++                    + "  WHERE risk.status = 'CONFIRMED' AND risk.anonymousId <> $id "
++                    + "} "
++                    + "SET target.status = 'ACTIVE', target.statusUpdatedAt = timestamp() "
++                    + "RETURN collect(DISTINCT target.anonymousId) as releasedIds";
++    private static final String RESOLVE_PHASE2 =
++            "MATCH (l1:User) WHERE l1.anonymousId IN $l1Ids "
++                    + "OPTIONAL MATCH (l1)-[:ENCOUNTERED|MEMBER_OF]-(target:User) "
++                    + "WHERE target.status = 'PROBABLE' "
++                    + "AND NOT EXISTS { "
++                    + "  MATCH (target)-[:ENCOUNTERED|MEMBER_OF]-(risk:User) "
++                    + "  WHERE (risk.status = 'CONFIRMED' OR risk.status = 'SUSPECT') "
++                    + "  AND NOT risk.anonymousId IN $l1Ids "
++                    + "  AND risk.anonymousId <> $sourceId "
++                    + "} "
++                    + "SET target.status = 'ACTIVE', target.statusUpdatedAt = timestamp() "
++                    + "RETURN collect(DISTINCT target.anonymousId) as releasedIds";
+ 
+-    @Autowired
+-    private HealthStatusService healthStatusService;
+-
+-    @MockBean
++    @Mock
+     private UserNodeRepository userNodeRepository;
+ 
+-    @MockBean
++    @Mock
+     private Neo4jClient neo4jClient;
+ 
+-    @MockBean
++    @Mock
+     private StringRedisTemplate redisTemplate;
+ 
+     @Mock
+     private ValueOperations<String, String> valueOperations;
+ 
+-    @MockBean
++    @Mock
+     private KafkaTemplate<String, Object> kafkaTemplate;
+ 
+-    @MockBean
+-    private org.springframework.cache.CacheManager cacheManager;
+-
+-    @MockBean
++    @Mock
+     private SystemSettingsRepository systemSettingsRepository;
+ 
+-    @MockBean
+-    private com.circleguard.promotion.repository.graph.CircleNodeRepository circleNodeRepository;
++    @Mock
++    private CircleNodeRepository circleNodeRepository;
++
++    private HealthStatusService healthStatusService;
++
++    @BeforeEach
++    void setUp() {
++        healthStatusService = new HealthStatusService(
++                userNodeRepository,
++                neo4jClient,
++                redisTemplate,
++                kafkaTemplate,
++                systemSettingsRepository,
++                circleNodeRepository
++        );
++    }
+ 
+     @Test
+     void shouldUpdateStatusSuccessfully() {
+-        String anonymousId = "user-abc-123";
+-        String status = "GREEN";
++        String anonymousId = TestDataBuilder.randomAnonymousId().toString();
++        String status = "SUSPECT";
+ 
+-        // Mock Neo4j using Deep Stubs for the fluent API
+-        Neo4jClient.UnboundRunnableSpec runnableSpec = Mockito.mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
++        Neo4jClient.UnboundRunnableSpec runnableSpec =
++                Mockito.mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
+         when(neo4jClient.query(anyString())).thenReturn(runnableSpec);
+-        
+-        java.util.Map<String, Object> resultMap = new java.util.HashMap<>();
++
++        Map<String, Object> resultMap = new HashMap<>();
+         resultMap.put("sourceId", anonymousId);
+-        resultMap.put("affectedContacts", java.util.Collections.emptyList());
+-        
++        resultMap.put("affectedContacts", Collections.emptyList());
++
+         when(runnableSpec.bind(anyString()).to(anyString())
+                 .bind(anyString()).to(anyString())
+                 .bind(ArgumentMatchers.anyLong()).to(anyString())
+                 .fetch().one())
+-            .thenReturn(Optional.of(resultMap));
++                .thenReturn(Optional.of(resultMap));
+ 
+-        // Mock Redis
+         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
++        when(circleNodeRepository.findNewlyFencedCircles(anonymousId)).thenReturn(Collections.emptyList());
+ 
+         assertDoesNotThrow(() -> healthStatusService.updateStatus(anonymousId, status));
+-        
+ 
+-        Mockito.verify(kafkaTemplate).send(ArgumentMatchers.anyString(), ArgumentMatchers.anyString(), ArgumentMatchers.any());
++        verify(kafkaTemplate).send(ArgumentMatchers.anyString(), ArgumentMatchers.anyString(), ArgumentMatchers.any());
+     }
+ 
+     @Test
+     void shouldThrowExceptionWhenUpdatingStatusToActiveWithinFenceWindow() {
+-        String anonymousId = "user-fenced";
+-        
+-        // Mock user in SUSPECT status updated 5 days ago
++        String anonymousId = TestDataBuilder.randomAnonymousId().toString();
++
+         long fiveDaysAgo = System.currentTimeMillis() - (5L * 24 * 60 * 60 * 1000);
+         UserNode user = UserNode.builder()
+                 .anonymousId(anonymousId)
+                 .status("SUSPECT")
+                 .statusUpdatedAt(fiveDaysAgo)
+                 .build();
+-        
++
+         when(userNodeRepository.findById(anonymousId)).thenReturn(Optional.of(user));
+-        
+-        // Mock settings with 14 day mandatory fence
++
+         SystemSettings settings = SystemSettings.builder()
+                 .mandatoryFenceDays(14)
+                 .build();
+@@ -127,29 +149,51 @@ class HealthStatusServiceTest {
+ 
+     @Test
+     void shouldAllowOverrideWhenWithinFenceWindow() {
+-        String anonymousId = "user-fenced-override";
+-        
++        String anonymousId = TestDataBuilder.randomAnonymousId().toString();
++
+         long fiveDaysAgo = System.currentTimeMillis() - (5L * 24 * 60 * 60 * 1000);
+         UserNode user = UserNode.builder()
+                 .anonymousId(anonymousId)
+                 .status("SUSPECT")
+                 .statusUpdatedAt(fiveDaysAgo)
+                 .build();
+-        
++
+         when(userNodeRepository.findById(anonymousId)).thenReturn(Optional.of(user));
+-        
++
+         SystemSettings settings = SystemSettings.builder()
+                 .mandatoryFenceDays(14)
+                 .build();
+         when(systemSettingsRepository.getSettings()).thenReturn(Optional.of(settings));
+ 
+-        // Mock Neo4j
+-        Neo4jClient.UnboundRunnableSpec runnableSpec = Mockito.mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
+-        when(neo4jClient.query(anyString())).thenReturn(runnableSpec);
+-        
+-        // Mock Redis
+         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
++        stubNeo4jForResolveStatus(anonymousId);
+ 
+         assertDoesNotThrow(() -> healthStatusService.resolveStatus(anonymousId, true));
+     }
++
++    private void stubNeo4jForResolveStatus(String anonymousId) {
++        when(neo4jClient.query(eq(RESOLVE_USER_ACTIVE)))
++                .thenAnswer(invocation -> {
++                    Neo4jClient.UnboundRunnableSpec spec =
++                            mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
++                    when(spec.bind(eq(anonymousId)).to("id").run()).thenReturn(null);
++                    return spec;
++                });
++        when(neo4jClient.query(eq(RESOLVE_PHASE1)))
++                .thenAnswer(invocation -> {
++                    Neo4jClient.UnboundRunnableSpec spec =
++                            mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
++                    when(spec.bind(eq(anonymousId)).to("id").fetch().one())
++                            .thenReturn(Optional.of(Map.of("releasedIds", Collections.<String>emptyList())));
++                    return spec;
++                });
++        when(neo4jClient.query(eq(RESOLVE_PHASE2)))
++                .thenAnswer(invocation -> {
++                    Neo4jClient.UnboundRunnableSpec spec =
++                            mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
++                    when(spec.bind(ArgumentMatchers.<List<String>>any()).to("l1Ids").bind(eq(anonymousId)).to("sourceId").fetch().one())
++                            .thenReturn(Optional.of(Map.of("releasedIds", Collections.emptyList())));
++                    return spec;
++                });
++    }
+ }
+diff --git a/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/StatusLifecycleTest.java b/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/StatusLifecycleTest.java
+index a34b0b6..8c1ecc3 100644
+--- a/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/StatusLifecycleTest.java
++++ b/services/circleguard-promotion-service/src/test/java/com/circleguard/promotion/service/StatusLifecycleTest.java
+@@ -4,19 +4,17 @@ import com.circleguard.promotion.model.jpa.SystemSettings;
+ import com.circleguard.promotion.repository.jpa.SystemSettingsRepository;
+ import org.junit.jupiter.api.BeforeEach;
+ import org.junit.jupiter.api.Test;
++import org.junit.jupiter.api.extension.ExtendWith;
+ import org.mockito.ArgumentMatchers;
++import org.mockito.Mock;
+ import org.mockito.Mockito;
+-import org.springframework.beans.factory.annotation.Autowired;
+-import org.springframework.boot.test.context.SpringBootTest;
+-import org.springframework.boot.test.context.TestConfiguration;
+-import org.springframework.boot.test.mock.mockito.MockBean;
+-import org.springframework.context.annotation.Bean;
+-import org.springframework.context.annotation.Primary;
++import org.mockito.junit.jupiter.MockitoExtension;
++import org.mockito.junit.jupiter.MockitoSettings;
++import org.mockito.quality.Strictness;
+ import org.springframework.data.neo4j.core.Neo4jClient;
+ import org.springframework.data.redis.core.StringRedisTemplate;
+ import org.springframework.data.redis.core.ValueOperations;
+ import org.springframework.kafka.core.KafkaTemplate;
+-import org.springframework.test.context.ActiveProfiles;
+ 
+ import java.util.Collections;
+ import java.util.List;
+@@ -24,49 +22,48 @@ import java.util.Map;
+ import java.util.Optional;
+ 
+ import static org.mockito.ArgumentMatchers.anyLong;
+-import static org.mockito.ArgumentMatchers.anyString;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.when;
+ 
+-@SpringBootTest(properties = "spring.main.allow-bean-definition-overriding=true")
+-@ActiveProfiles("test")
++@ExtendWith(MockitoExtension.class)
++@MockitoSettings(strictness = Strictness.LENIENT)
+ class StatusLifecycleTest {
+ 
+-    @TestConfiguration
+-    static class TestConfig {
+-        @Bean
+-        @Primary
+-        public org.springframework.transaction.PlatformTransactionManager transactionManager() {
+-            return Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class);
+-        }
+-
+-        @Bean(name = "neo4jTransactionManager")
+-        public org.springframework.transaction.PlatformTransactionManager neo4jTransactionManager() {
+-            return Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class);
+-        }
+-    }
+-
+-    @Autowired
+-    private StatusLifecycleService lifecycleService;
+-
+-    @MockBean
++    private static final String LIFECYCLE_LOG_QUERY =
++            "MATCH (u:User) "
++                    + "WHERE u.status IN ['SUSPECT', 'PROBABLE'] "
++                    + "RETURN u.anonymousId as id, u.statusUpdatedAt as updated, $threshold as thresh";
++    private static final String LIFECYCLE_UPDATE_QUERY =
++            "MATCH (u:User) "
++                    + "WHERE u.status IN ['SUSPECT', 'PROBABLE'] "
++                    + "  AND coalesce(u.statusUpdatedAt, 0) < $threshold "
++                    + "SET u.status = 'ACTIVE', u.statusUpdatedAt = timestamp() "
++                    + "RETURN collect(u.anonymousId) as releasedIds";
++
++    @Mock
+     private Neo4jClient neo4jClient;
+ 
+-    @MockBean
++    @Mock
+     private SystemSettingsRepository settingsRepository;
+ 
+-    @MockBean
++    @Mock
+     private StringRedisTemplate redisTemplate;
+ 
+-    @MockBean
++    @Mock
+     private KafkaTemplate<String, Object> kafkaTemplate;
+ 
+-    @MockBean
++    @Mock
+     private ValueOperations<String, String> valueOperations;
+ 
++    private StatusLifecycleService lifecycleService;
++
+     @BeforeEach
+     void setup() {
+-        // Seed settings: 14 day mandatory fence
++        lifecycleService = new StatusLifecycleService(
++                neo4jClient, settingsRepository, redisTemplate, kafkaTemplate);
++
+         SystemSettings settings = SystemSettings.builder()
+                 .unconfirmedFencingEnabled(true)
+                 .autoThresholdSeconds(3600L)
+@@ -79,44 +76,41 @@ class StatusLifecycleTest {
+ 
+     @Test
+     void automaticTransition_ReleasesExpiredUsers() {
+-        // 1. Setup mock Neo4j response
+-        Neo4jClient.UnboundRunnableSpec runnableSpec = Mockito.mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
+-        when(neo4jClient.query(anyString())).thenReturn(runnableSpec);
+-        
+         Map<String, Object> resultMap = Map.of(
+-            "releasedIds", List.of("EXPIRED_USER")
++                "releasedIds", List.of("EXPIRED_USER")
+         );
+-        
+-        when(runnableSpec.bind(anyLong()).to(anyString())
+-                .fetch().one())
+-            .thenReturn(Optional.of(resultMap));
+-
+-        // 2. Action: Run lifecycle processor
++        stubNeo4jQueriesForLifecycle(resultMap);
+         lifecycleService.processAutomaticTransitions();
+ 
+-        // 3. Verify: Redis and Kafka updated
+         verify(valueOperations).multiSet(ArgumentMatchers.anyMap());
+         verify(kafkaTemplate).send(ArgumentMatchers.eq("promotion.status.changed"), ArgumentMatchers.eq("EXPIRED_USER"), ArgumentMatchers.anyMap());
+     }
+ 
+     @Test
+     void automaticTransition_HandlesEmptyResults() {
+-        // 1. Setup mock Neo4j response with no released users
+-        Neo4jClient.UnboundRunnableSpec runnableSpec = Mockito.mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
+-        when(neo4jClient.query(anyString())).thenReturn(runnableSpec);
+-        
+         Map<String, Object> resultMap = Map.of(
+-            "releasedIds", Collections.emptyList()
++                "releasedIds", Collections.emptyList()
+         );
+-        
+-        when(runnableSpec.bind(anyLong()).to(anyString())
+-                .fetch().one())
+-            .thenReturn(Optional.of(resultMap));
+-
+-        // 2. Action: Run lifecycle processor
++        stubNeo4jQueriesForLifecycle(resultMap);
+         lifecycleService.processAutomaticTransitions();
+ 
+-        // 3. Verify: No interactions with Redis/Kafka
+         verify(valueOperations, Mockito.never()).multiSet(ArgumentMatchers.anyMap());
+     }
++
++    private void stubNeo4jQueriesForLifecycle(Map<String, Object> updateResult) {
++        when(neo4jClient.query(eq(LIFECYCLE_LOG_QUERY)))
++                .thenAnswer(inv -> {
++                    Neo4jClient.UnboundRunnableSpec spec =
++                            mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
++                    when(spec.bind(anyLong()).to("threshold").fetch().all()).thenReturn(Collections.emptyList());
++                    return spec;
++                });
++        when(neo4jClient.query(eq(LIFECYCLE_UPDATE_QUERY)))
++                .thenAnswer(inv -> {
++                    Neo4jClient.UnboundRunnableSpec spec =
++                            mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
++                    when(spec.bind(anyLong()).to("threshold").fetch().one()).thenReturn(Optional.of(updateResult));
++                    return spec;
++                });
++    }
+ }

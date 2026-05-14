@@ -1,8 +1,13 @@
-# Stub — fully defined in Story 4.1 (includes RollingUpdate strategy + HPA for promotion-service)
+# Master: mirror Stage registry/repo pattern — pipeline passes `--set image.tag=<7-char-sha>` via deployToNamespace.
+# Align host with buildAndPush + cluster pull path (docker-registry vs CI_REGISTRY_HOST) per Story 3-1 notes.
 image:
   repository: docker-registry:5000/circleguard-gateway-service
   tag: "master"
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
+
+service:
+  port: 8087
 
 env: master
 replicaCount: 2
+resources: {}

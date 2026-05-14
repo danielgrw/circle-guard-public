@@ -8,9 +8,9 @@
  * Integration tests live under src/integrationTest/java/ and start real
  * Testcontainers (Kafka → Neo4j → Postgres → Redis order as applicable).
  *
- * The glob is scoped to the specific service subproject to prevent cross-service
- * result contamination when multiple services share a single non-clean workspace.
- * JUnit XML output: services/{serviceName}/build/test-results/**\/*.xml
+ * JUnit XML output: services/{serviceName}/build/test-results/integrationTest/ ... /*.xml
+ *
+ * On non-zero Gradle exit: publishes reports then error("Tests failed").
  *
  * @param serviceName  Full Gradle subproject name, e.g. "circleguard-auth-service"
  *
@@ -27,13 +27,16 @@ def call(String serviceName) {
 
     echo "=== runIntegrationTests: ${serviceName} ==="
     withEnv(["TESTCONTAINERS_REUSE_ENABLE=false"]) {
+        def rc = 1
         try {
-            sh "./gradlew :services:${serviceName}:integrationTest"
+            rc = sh(script: "./gradlew :services:${serviceName}:integrationTest", returnStatus: true)
         } finally {
-            // Scoped to this service's subproject — avoids contaminating results
-            // from other services that may exist in the same workspace
             junit allowEmptyResults: true,
-                  testResults: "services/${serviceName}/build/test-results/**/*.xml"
+                  testResults: "services/${serviceName}/build/test-results/integrationTest/**/*.xml",
+                  checksName: "Integration — ${serviceName}"
+        }
+        if (rc != 0) {
+            error("Tests failed")
         }
     }
 }

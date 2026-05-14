@@ -21,7 +21,11 @@ def call(String serviceName) {
 
     // --short=7 guarantees exactly 7 characters regardless of repo size
     def gitSha   = sh(script: "git rev-parse --short=7 HEAD", returnStdout: true).trim()
-    def registry = "docker-registry:5000"
+    // DooD (socket on host): push runs on the host daemon — it cannot resolve compose DNS names like
+    // docker-registry. Default localhost:5000 matches docker-compose port mapping + kind local-registry.
+    // Override with global env CI_REGISTRY_HOST (e.g. docker-registry:5000 only if your Docker engine
+    // runs on the same user-defined network as the registry).
+    def registry = (env.CI_REGISTRY_HOST?.trim() ?: 'localhost:5000')
     def imageTag = "${registry}/${serviceName}:${gitSha}"
 
     echo "=== buildAndPush: ${serviceName} (sha=${gitSha}) ==="
@@ -29,11 +33,14 @@ def call(String serviceName) {
     echo "Step 1/3 — Building bootJar for :services:${serviceName}..."
     sh "./gradlew :services:${serviceName}:bootJar"
 
+    // Prefer absolute path: Pipeline remoting sometimes omits /usr/bin from PATH ("docker: not found").
+    def docker = (env.DOCKER_BIN?.trim() ?: '/usr/bin/docker')
+
     echo "Step 2/3 — Building Docker image ${imageTag}..."
-    sh "docker build -t ${imageTag} -f services/${serviceName}/Dockerfile ."
+    sh "${docker} build -t ${imageTag} -f services/${serviceName}/Dockerfile ."
 
     echo "Step 3/3 — Pushing ${imageTag} to registry..."
-    sh "docker push ${imageTag}"
+    sh "${docker} push ${imageTag}"
 
     echo "=== buildAndPush complete: ${imageTag} ==="
     return gitSha

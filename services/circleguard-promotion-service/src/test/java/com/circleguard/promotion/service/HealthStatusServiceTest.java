@@ -1,122 +1,144 @@
 package com.circleguard.promotion.service;
 
+import com.circleguard.promotion.exception.FenceException;
+import com.circleguard.promotion.model.graph.UserNode;
+import com.circleguard.promotion.model.jpa.SystemSettings;
+import com.circleguard.promotion.repository.graph.CircleNodeRepository;
 import com.circleguard.promotion.repository.graph.UserNodeRepository;
+import com.circleguard.promotion.repository.jpa.SystemSettingsRepository;
+import com.circleguard.test.TestDataBuilder;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentMatchers;
-import org.mockito.Mockito;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
-import org.springframework.data.neo4j.core.Neo4jClient;
 import org.mockito.Mock;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.test.context.ActiveProfiles;
+
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import com.circleguard.promotion.exception.FenceException;
-import com.circleguard.promotion.model.graph.UserNode;
-import com.circleguard.promotion.model.jpa.SystemSettings;
-import com.circleguard.promotion.repository.jpa.SystemSettingsRepository;
-import java.util.Optional;
 
-@SpringBootTest(properties = "spring.main.allow-bean-definition-overriding=true")
-@ActiveProfiles("test")
-@AutoConfigureMockMvc
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class HealthStatusServiceTest {
 
-    @TestConfiguration
-    static class TestConfig {
-        @Bean
-        @Primary
-        public org.springframework.transaction.PlatformTransactionManager transactionManager() {
-            return Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class);
-        }
+    private static final String RESOLVE_USER_ACTIVE =
+            "MATCH (u:User {anonymousId: $id}) SET u.status = 'ACTIVE', u.statusUpdatedAt = timestamp()";
+    private static final String RESOLVE_PHASE1 =
+            "MATCH (source:User {anonymousId: $id}) "
+                    + "OPTIONAL MATCH (source)-[:ENCOUNTERED|MEMBER_OF]-(target:User) "
+                    + "WHERE target.status = 'SUSPECT' "
+                    + "AND NOT EXISTS { "
+                    + "  MATCH (target)-[:ENCOUNTERED|MEMBER_OF]-(risk:User) "
+                    + "  WHERE risk.status = 'CONFIRMED' AND risk.anonymousId <> $id "
+                    + "} "
+                    + "SET target.status = 'ACTIVE', target.statusUpdatedAt = timestamp() "
+                    + "RETURN collect(DISTINCT target.anonymousId) as releasedIds";
+    private static final String RESOLVE_PHASE2 =
+            "MATCH (l1:User) WHERE l1.anonymousId IN $l1Ids "
+                    + "OPTIONAL MATCH (l1)-[:ENCOUNTERED|MEMBER_OF]-(target:User) "
+                    + "WHERE target.status = 'PROBABLE' "
+                    + "AND NOT EXISTS { "
+                    + "  MATCH (target)-[:ENCOUNTERED|MEMBER_OF]-(risk:User) "
+                    + "  WHERE (risk.status = 'CONFIRMED' OR risk.status = 'SUSPECT') "
+                    + "  AND NOT risk.anonymousId IN $l1Ids "
+                    + "  AND risk.anonymousId <> $sourceId "
+                    + "} "
+                    + "SET target.status = 'ACTIVE', target.statusUpdatedAt = timestamp() "
+                    + "RETURN collect(DISTINCT target.anonymousId) as releasedIds";
 
-        @Bean(name = "neo4jTransactionManager")
-        public org.springframework.transaction.PlatformTransactionManager neo4jTransactionManager() {
-            return Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class);
-        }
-    }
-
-    @Autowired
-    private HealthStatusService healthStatusService;
-
-    @MockBean
+    @Mock
     private UserNodeRepository userNodeRepository;
 
-    @MockBean
+    @Mock
     private Neo4jClient neo4jClient;
 
-    @MockBean
+    @Mock
     private StringRedisTemplate redisTemplate;
 
     @Mock
     private ValueOperations<String, String> valueOperations;
 
-    @MockBean
+    @Mock
     private KafkaTemplate<String, Object> kafkaTemplate;
 
-    @MockBean
-    private org.springframework.cache.CacheManager cacheManager;
-
-    @MockBean
+    @Mock
     private SystemSettingsRepository systemSettingsRepository;
 
-    @MockBean
-    private com.circleguard.promotion.repository.graph.CircleNodeRepository circleNodeRepository;
+    @Mock
+    private CircleNodeRepository circleNodeRepository;
+
+    private HealthStatusService healthStatusService;
+
+    @BeforeEach
+    void setUp() {
+        healthStatusService = new HealthStatusService(
+                userNodeRepository,
+                neo4jClient,
+                redisTemplate,
+                kafkaTemplate,
+                systemSettingsRepository,
+                circleNodeRepository
+        );
+    }
 
     @Test
     void shouldUpdateStatusSuccessfully() {
-        String anonymousId = "user-abc-123";
-        String status = "GREEN";
+        String anonymousId = TestDataBuilder.randomAnonymousId().toString();
+        String status = "SUSPECT";
 
-        // Mock Neo4j using Deep Stubs for the fluent API
-        Neo4jClient.UnboundRunnableSpec runnableSpec = Mockito.mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
+        Neo4jClient.UnboundRunnableSpec runnableSpec =
+                Mockito.mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
         when(neo4jClient.query(anyString())).thenReturn(runnableSpec);
-        
-        java.util.Map<String, Object> resultMap = new java.util.HashMap<>();
+
+        Map<String, Object> resultMap = new HashMap<>();
         resultMap.put("sourceId", anonymousId);
-        resultMap.put("affectedContacts", java.util.Collections.emptyList());
-        
+        resultMap.put("affectedContacts", Collections.emptyList());
+
         when(runnableSpec.bind(anyString()).to(anyString())
                 .bind(anyString()).to(anyString())
                 .bind(ArgumentMatchers.anyLong()).to(anyString())
                 .fetch().one())
-            .thenReturn(Optional.of(resultMap));
+                .thenReturn(Optional.of(resultMap));
 
-        // Mock Redis
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(circleNodeRepository.findNewlyFencedCircles(anonymousId)).thenReturn(Collections.emptyList());
 
         assertDoesNotThrow(() -> healthStatusService.updateStatus(anonymousId, status));
-        
 
-        Mockito.verify(kafkaTemplate).send(ArgumentMatchers.anyString(), ArgumentMatchers.anyString(), ArgumentMatchers.any());
+        verify(kafkaTemplate).send(ArgumentMatchers.anyString(), ArgumentMatchers.anyString(), ArgumentMatchers.any());
     }
 
     @Test
     void shouldThrowExceptionWhenUpdatingStatusToActiveWithinFenceWindow() {
-        String anonymousId = "user-fenced";
-        
-        // Mock user in SUSPECT status updated 5 days ago
+        String anonymousId = TestDataBuilder.randomAnonymousId().toString();
+
         long fiveDaysAgo = System.currentTimeMillis() - (5L * 24 * 60 * 60 * 1000);
         UserNode user = UserNode.builder()
                 .anonymousId(anonymousId)
                 .status("SUSPECT")
                 .statusUpdatedAt(fiveDaysAgo)
                 .build();
-        
+
         when(userNodeRepository.findById(anonymousId)).thenReturn(Optional.of(user));
-        
-        // Mock settings with 14 day mandatory fence
+
         SystemSettings settings = SystemSettings.builder()
                 .mandatoryFenceDays(14)
                 .build();
@@ -127,29 +149,51 @@ class HealthStatusServiceTest {
 
     @Test
     void shouldAllowOverrideWhenWithinFenceWindow() {
-        String anonymousId = "user-fenced-override";
-        
+        String anonymousId = TestDataBuilder.randomAnonymousId().toString();
+
         long fiveDaysAgo = System.currentTimeMillis() - (5L * 24 * 60 * 60 * 1000);
         UserNode user = UserNode.builder()
                 .anonymousId(anonymousId)
                 .status("SUSPECT")
                 .statusUpdatedAt(fiveDaysAgo)
                 .build();
-        
+
         when(userNodeRepository.findById(anonymousId)).thenReturn(Optional.of(user));
-        
+
         SystemSettings settings = SystemSettings.builder()
                 .mandatoryFenceDays(14)
                 .build();
         when(systemSettingsRepository.getSettings()).thenReturn(Optional.of(settings));
 
-        // Mock Neo4j
-        Neo4jClient.UnboundRunnableSpec runnableSpec = Mockito.mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
-        when(neo4jClient.query(anyString())).thenReturn(runnableSpec);
-        
-        // Mock Redis
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        stubNeo4jForResolveStatus(anonymousId);
 
         assertDoesNotThrow(() -> healthStatusService.resolveStatus(anonymousId, true));
+    }
+
+    private void stubNeo4jForResolveStatus(String anonymousId) {
+        when(neo4jClient.query(eq(RESOLVE_USER_ACTIVE)))
+                .thenAnswer(invocation -> {
+                    Neo4jClient.UnboundRunnableSpec spec =
+                            mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
+                    when(spec.bind(eq(anonymousId)).to("id").run()).thenReturn(null);
+                    return spec;
+                });
+        when(neo4jClient.query(eq(RESOLVE_PHASE1)))
+                .thenAnswer(invocation -> {
+                    Neo4jClient.UnboundRunnableSpec spec =
+                            mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
+                    when(spec.bind(eq(anonymousId)).to("id").fetch().one())
+                            .thenReturn(Optional.of(Map.of("releasedIds", Collections.<String>emptyList())));
+                    return spec;
+                });
+        when(neo4jClient.query(eq(RESOLVE_PHASE2)))
+                .thenAnswer(invocation -> {
+                    Neo4jClient.UnboundRunnableSpec spec =
+                            mock(Neo4jClient.UnboundRunnableSpec.class, Mockito.RETURNS_DEEP_STUBS);
+                    when(spec.bind(ArgumentMatchers.<List<String>>any()).to("l1Ids").bind(eq(anonymousId)).to("sourceId").fetch().one())
+                            .thenReturn(Optional.of(Map.of("releasedIds", Collections.emptyList())));
+                    return spec;
+                });
     }
 }

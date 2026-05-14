@@ -6,6 +6,8 @@ plugins {
     kotlin("plugin.jpa")
 }
 
+apply(from = rootProject.file("gradle/java-integration-test.gradle"))
+
 dependencies {
     implementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
     testImplementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
@@ -22,6 +24,13 @@ dependencies {
     runtimeOnly("org.postgresql:postgresql")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.security:spring-security-test")
+    testImplementation(project(":test-support"))
+
+    "integrationTestImplementation"("org.springframework.boot:spring-boot-starter-test")
+    "integrationTestImplementation"("org.springframework.security:spring-security-test")
+    "integrationTestImplementation"("org.testcontainers:junit-jupiter:1.19.3")
+    "integrationTestImplementation"("org.testcontainers:postgresql:1.19.3")
+    "integrationTestImplementation"(project(":test-support"))
 }
 
 tasks.jar { enabled = false }

@@ -4,6 +4,7 @@ import com.circleguard.auth.client.IdentityClient;
 import com.circleguard.auth.service.JwtTokenService;
 import com.circleguard.auth.service.CustomUserDetailsService;
 import com.circleguard.auth.security.SecurityConfig;
+import com.circleguard.test.TestDataBuilder;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.Import;
 import org.mockito.Mockito;
@@ -42,9 +43,9 @@ public class LoginControllerTest {
 
     @Test
     void shouldLoginSuccessfullyAndReturnAnonymizedToken() throws Exception {
-        String username = "testuser";
-        String password = "password123";
-        UUID anonymousId = UUID.randomUUID();
+        String username = "synthetic-login-a";
+        String password = "pw";
+        UUID anonymousId = TestDataBuilder.randomAnonymousId();
         String token = "mock-jwt-token";
 
         Authentication auth = Mockito.mock(Authentication.class);
@@ -58,7 +59,7 @@ public class LoginControllerTest {
 
         mockMvc.perform(post("/api/v1/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\": \"testuser\", \"password\": \"password123\"}"))
+                .content("{\"username\": \"synthetic-login-a\", \"password\": \"pw\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.token").value(token))
                 .andExpect(jsonPath("$.anonymousId").value(anonymousId.toString()))

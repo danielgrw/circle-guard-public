@@ -1,0 +1,120 @@
+/**
+ * Jenkinsfile.stage — CircleGuard Stage Pipeline
+ *
+ * Stage order (Epic 3 / Story 3.4):
+ *   Build & Docker Push → Unit Tests → Integration Tests → Deploy to Stage →
+ *   E2E Tests (hard gate) → Locust Performance (advisory, AR-9)
+ *
+ * Promotion gate (Epic 2 / Story 2.5): unit + integration must be green before deploy.
+ * Deploy to Stage includes a fresh namespace (Story 3.1) then Helm upgrade for all 6 services.
+ *
+ * Jenkins job: point Multibranch / Pipeline script path at this file (repository root:
+ * circle-guard-public/, same as Jenkinsfile.dev).
+ *
+ * Shared library: Global Pipeline Library `circleguard-shared-library` (vars → jenkins/vars).
+ *
+ * Pre-requisites (Jenkins admin):
+ *   - Global (or job) env: STAGE_BASE_URL=<gateway reachable from Jenkins agent>
+ *     e.g. http://<node-ip>:<nodeport> or in-cluster DNS for circleguard-gateway-service.
+ *   - Same library registration as Jenkinsfile.dev (see jenkins/docker/casc / docs/bootstrap/README.md).
+ */
+@Library('circleguard-shared-library') _
+
+pipeline {
+    agent any
+
+    environment {
+        STAGE_NAMESPACE = 'circleguard-stage'
+        ENV_LABEL       = 'stage'
+    }
+
+    stages {
+        stage('Build & Docker Push') {
+            steps {
+                script {
+                    def gitSha = buildAndPush('circleguard-gateway-service')
+                    buildAndPush('circleguard-auth-service')
+                    buildAndPush('circleguard-identity-service')
+                    buildAndPush('circleguard-form-service')
+                    buildAndPush('circleguard-promotion-service')
+                    buildAndPush('circleguard-notification-service')
+                    env.GIT_SHA = gitSha
+                }
+            }
+        }
+
+        stage('Unit Tests') {
+            steps {
+                script {
+                    runUnitTests('circleguard-gateway-service')
+                    runUnitTests('circleguard-auth-service')
+                    runUnitTests('circleguard-identity-service')
+                    runUnitTests('circleguard-form-service')
+                    runUnitTests('circleguard-promotion-service')
+                    runUnitTests('circleguard-notification-service')
+                }
+            }
+        }
+
+        stage('Integration Tests') {
+            steps {
+                script {
+                    runIntegrationTests('circleguard-gateway-service')
+                    runIntegrationTests('circleguard-auth-service')
+                    runIntegrationTests('circleguard-identity-service')
+                    runIntegrationTests('circleguard-form-service')
+                    runIntegrationTests('circleguard-promotion-service')
+                    runIntegrationTests('circleguard-notification-service')
+                }
+            }
+        }
+
+        stage('Deploy to Stage') {
+            steps {
+                echo '=== Epic 3 / Story 3.1 — fresh circleguard-stage, then Helm deploy ==='
+                sh '''
+                    kubectl delete namespace circleguard-stage --ignore-not-found --wait=true --timeout=300s
+                    kubectl create namespace circleguard-stage
+                '''
+                script {
+                    deployToNamespace('circleguard-gateway-service',      env.ENV_LABEL, env.STAGE_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-auth-service',         env.ENV_LABEL, env.STAGE_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-identity-service',     env.ENV_LABEL, env.STAGE_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-form-service',         env.ENV_LABEL, env.STAGE_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-promotion-service',    env.ENV_LABEL, env.STAGE_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-notification-service', env.ENV_LABEL, env.STAGE_NAMESPACE, env.GIT_SHA)
+                }
+            }
+        }
+
+        stage('E2E Tests') {
+            steps {
+                script {
+                    runE2ETests()
+                }
+            }
+        }
+
+        stage('Locust Performance') {
+            steps {
+                script {
+                    runLocust()
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            junit allowEmptyResults: true,
+                  testResults: '**/build/test-results/test/**/*.xml',
+                  checksName: 'Unit (aggregate)'
+            junit allowEmptyResults: true,
+                  testResults: '**/build/test-results/integrationTest/**/*.xml',
+                  checksName: 'Integration (aggregate)'
+            archiveArtifacts allowEmptyArchive: true,
+                             artifacts: 'services/*/build/reports/tests/**/*'
+            echo "=== Jenkinsfile.stage pipeline complete — result: ${currentBuild.result ?: 'SUCCESS'} ==="
+        }
+    }
+}
