@@ -1,8 +1,11 @@
-# Stub — fully defined in Story 3.1
+# See circleguard-gateway-service/values-stage.yaml for registry alignment notes.
 image:
   repository: docker-registry:5000/circleguard-auth-service
   tag: "stage"
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
+
+service:
+  port: 8180
 
 env: stage
 replicaCount: 1

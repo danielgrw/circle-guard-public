@@ -84,6 +84,13 @@ CircleGuard follows a **Microservice Architecture** built on a **Hybrid Data Mod
 
 ---
 
+## 🤝 Contributing
+
+- **Commit messages:** Follow [Conventional Commits](CONTRIBUTING.md#commit-messages-conventional-commits) — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for allowed prefixes (`feat:`, `fix:`, `test:`, `ci:`, `chore:`) and anti-patterns.
+- **CI:** Dev pipeline — `Jenkinsfile.dev`; Stage promotion gate — `Jenkinsfile.stage` (unit + integration green before deploy to `circleguard-stage`).
+
+---
+
 ## 💻 Local Development
 
 ### 1. Infrastructure
@@ -148,6 +155,26 @@ We maintain high system integrity via multi-level testing:
 | `./gradlew :services:<name>:test` | Single service testing |
 
 **Note**: Integration tests use **Testcontainers** to spawn ephemeral Neo4j and PostgreSQL instances for zero-side-effect validation.
+
+---
+
+## Release notes (git-cliff)
+
+The Master pipeline will call `generateReleaseNotes()` (see `jenkins/vars/generateReleaseNotes.groovy`). Operators and agents need:
+
+| Requirement | Notes |
+|:---|:---|
+| **git-cliff** | Install on Jenkins agents so `git-cliff` is on `PATH`, **or** set `GIT_CLIFF_BIN` to the binary path (e.g. `/usr/local/bin/git-cliff`). |
+| **Git tags** | The step requires at least one **reachable tag** (`git describe --tags --abbrev=0`). Without tags it fails fast with a clear error. |
+| **Config** | `cliff.toml` at the **repository root** defines sections for Conventional Commit groups (`Features`, `Fixes`, `Tests`, `CI`, `Chores`). A duplicate copy lives under `jenkins/resources/cliff.toml` only for visibility — **keep both in sync** when editing. |
+| **Output** | The library runs `git-cliff --tag $(git describe --tags --abbrev=0) -o RELEASE_NOTES.md`, archives `RELEASE_NOTES.md` and `release-notes.properties`, and stores the same text as **git notes** on the tagged commit (`refs/notes/cliff-releases`). |
+| **Publishing notes** | To push notes to `origin`: `git push origin refs/notes/cliff-releases`. Wrap with Jenkins credentials — e.g. `sshagent(credentials: ['circleguard-git-ssh']) { sh 'git push origin refs/notes/cliff-releases' }` **or** your org’s standard Git/SSH credential binding. **Replace `circleguard-git-ssh`** with the real **Credentials ID** from your Jenkins controller (manage credentials / job param); keep the ID documented next to the Master pipeline job. |
+
+Local dry-run (after [installing git-cliff](https://github.com/orhun/git-cliff)):
+
+```bash
+git-cliff --tag "$(git describe --tags --abbrev=0)" -o RELEASE_NOTES.md
+```
 
 ---
 

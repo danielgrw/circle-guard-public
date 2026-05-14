@@ -1,0 +1,4 @@
+# Profile: integration-test (see smoke tests under src/integrationTest/java).
+spring:
+  main:
+    allow-bean-definition-overriding: true

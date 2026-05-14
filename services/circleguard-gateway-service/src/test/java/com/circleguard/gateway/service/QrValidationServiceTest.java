@@ -1,5 +1,6 @@
 package com.circleguard.gateway.service;
 
+import com.circleguard.test.TestDataBuilder;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
@@ -11,7 +12,6 @@ import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.security.Key;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -34,7 +34,7 @@ public class QrValidationServiceTest {
 
     @Test
     void shouldValidateCorrectTokenAndAllowAccess() {
-        String anonymousId = UUID.randomUUID().toString();
+        String anonymousId = TestDataBuilder.randomAnonymousId().toString();
         Key key = Keys.hmacShaKeyFor(secret.getBytes());
         String token = Jwts.builder()
                 .setSubject(anonymousId)
@@ -51,7 +51,7 @@ public class QrValidationServiceTest {
 
     @Test
     void shouldDenyAccessForContagiedUser() {
-        String anonymousId = UUID.randomUUID().toString();
+        String anonymousId = TestDataBuilder.randomAnonymousId().toString();
         Key key = Keys.hmacShaKeyFor(secret.getBytes());
         String token = Jwts.builder()
                 .setSubject(anonymousId)
@@ -62,6 +62,36 @@ public class QrValidationServiceTest {
 
         QrValidationService.ValidationResult result = service.validateToken(token);
         
+        assertFalse(result.valid());
+        assertEquals("RED", result.status());
+    }
+
+    @Test
+    void shouldRejectMalformedJwt() {
+        QrValidationService.ValidationResult result = service.validateToken("not-a-valid-jwt");
+        assertFalse(result.valid());
+        assertEquals("RED", result.status());
+    }
+
+    @Test
+    void shouldRejectNullToken() {
+        QrValidationService.ValidationResult result = service.validateToken(null);
+        assertFalse(result.valid());
+        assertEquals("RED", result.status());
+    }
+
+    @Test
+    void shouldDenyAccessForPotentialUser() {
+        String anonymousId = TestDataBuilder.randomAnonymousId().toString();
+        Key key = Keys.hmacShaKeyFor(secret.getBytes());
+        String token = Jwts.builder()
+                .setSubject(anonymousId)
+                .signWith(key, SignatureAlgorithm.HS256)
+                .compact();
+
+        Mockito.when(valueOps.get("user:status:" + anonymousId)).thenReturn("POTENTIAL");
+
+        QrValidationService.ValidationResult result = service.validateToken(token);
         assertFalse(result.valid());
         assertEquals("RED", result.status());
     }

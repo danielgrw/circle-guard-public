@@ -1,6 +1,7 @@
 package com.circleguard.identity.repository;
 
 import com.circleguard.identity.model.IdentityMapping;
+import com.circleguard.test.TestDataBuilder;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
@@ -8,7 +9,6 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -23,8 +23,8 @@ class IdentityMappingRepositoryTest {
     @Test
     void shouldSaveAndRetrieveWithAutomaticEncryption() {
         IdentityMapping mapping = IdentityMapping.builder()
-                .realIdentity("test-user")
-                .anonymousId(UUID.randomUUID())
+                .realIdentity("synthetic-vault-handle-alpha")
+                .anonymousId(TestDataBuilder.randomAnonymousId())
                 .identityHash("hash123")
                 .salt("salt123")
                 .build();
@@ -37,18 +37,18 @@ class IdentityMappingRepositoryTest {
         repository.flush();
         
         IdentityMapping found = repository.findById(saved.getAnonymousId()).orElseThrow();
-        assertEquals("test-user", found.getRealIdentity());
+        assertEquals("synthetic-vault-handle-alpha", found.getRealIdentity());
     }
 
     @Test
     void shouldFindMappingByIdentityHash() {
-        String realIdentity = "user@example.com";
+        String realIdentity = "synthetic-vault-token-beta";
         String hash = "hash123";
         String salt = "salt456";
         
         IdentityMapping mapping = IdentityMapping.builder()
                 .realIdentity(realIdentity)
-                .anonymousId(UUID.randomUUID())
+                .anonymousId(TestDataBuilder.randomAnonymousId())
                 .identityHash(hash)
                 .salt(salt)
                 .build();

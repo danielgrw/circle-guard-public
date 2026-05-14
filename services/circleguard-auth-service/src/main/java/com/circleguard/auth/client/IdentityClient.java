@@ -1,18 +1,31 @@
 package com.circleguard.auth.client;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
-import java.util.*;
+
+import java.util.Map;
+import java.util.UUID;
 
 @Component
 public class IdentityClient {
-    // In a real microservice, this would use Feign or WebClient
+
     private final RestTemplate restTemplate = new RestTemplate();
-    private static final String IDENTITY_URL = "http://localhost:8083/api/v1/identities/map";
+
+    @Value("${circleguard.identity.map-url:http://localhost:8083/api/v1/identities/map}")
+    private String identityMapUrl;
 
     public UUID getAnonymousId(String realIdentity) {
         Map<String, String> request = Map.of("realIdentity", realIdentity);
-        Map response = restTemplate.postForObject(IDENTITY_URL, request, Map.class);
-        return UUID.fromString(response.get("anonymousId").toString());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> response = restTemplate.postForObject(identityMapUrl, request, Map.class);
+        if (response == null || response.get("anonymousId") == null) {
+            throw new IllegalStateException("identity /map returned no anonymousId");
+        }
+        Object raw = response.get("anonymousId");
+        if (raw instanceof UUID uuid) {
+            return uuid;
+        }
+        return UUID.fromString(raw.toString());
     }
 }

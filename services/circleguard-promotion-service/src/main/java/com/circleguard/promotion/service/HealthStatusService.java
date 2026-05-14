@@ -93,6 +93,17 @@ public class HealthStatusService {
                 .bind(threshold).to("threshold")
                 .fetch().one();
 
+        // Isolated users: OPTIONAL MATCH yields c1=NULL, WHERE c1 IS NOT NULL eliminates all rows, so RETURN
+        // never runs—but the initial SET on source still applied. Re-fetch synthetic row so Redis/Kafka run.
+        if (result.isEmpty()) {
+            result = neo4jClient.query(
+                    "MATCH (source:User {anonymousId: $id}) WHERE source.status = $status "
+                            + "RETURN source.anonymousId AS sourceId, [] AS affectedContacts")
+                    .bind(anonymousId).to("id")
+                    .bind(status).to("status")
+                    .fetch().one();
+        }
+
         if (result.isPresent()) {
             Map<String, String> cacheUpdates = new HashMap<>();
             cacheUpdates.put(STATUS_KEY_PREFIX + anonymousId, status);

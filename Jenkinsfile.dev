@@ -116,12 +116,15 @@ pipeline {
 
     post {
         always {
-            // Pipeline-level aggregator: produces consolidated trend graph and top-level
-            // build badge in Jenkins (AC-1.5.2). Per-step publishers inside runUnitTests /
-            // runIntegrationTests already guarantee per-service reports; this is the
-            // belt-and-suspenders pipeline summary. allowEmptyResults keeps the build green
-            // until integration-test source sets are wired in Story 2.2.
-            junit allowEmptyResults: true, testResults: '**/build/test-results/**/*.xml'
+            // Split Gradle test task outputs so Jenkins shows Unit vs Integration separately (Story 2.5).
+            junit allowEmptyResults: true,
+                  testResults: '**/build/test-results/test/**/*.xml',
+                  checksName: 'Unit (aggregate)'
+            junit allowEmptyResults: true,
+                  testResults: '**/build/test-results/integrationTest/**/*.xml',
+                  checksName: 'Integration (aggregate)'
+            archiveArtifacts allowEmptyArchive: true,
+                             artifacts: 'services/*/build/reports/tests/**/*'
             echo "=== Jenkinsfile.dev pipeline complete — result: ${currentBuild.result ?: 'SUCCESS'} ==="
         }
     }

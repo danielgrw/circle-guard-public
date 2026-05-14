@@ -1,0 +1,146 @@
+/**
+ * Jenkinsfile.master — CircleGuard Master / Production Pipeline
+ *
+ * Stage order (Epic 4 / Story 4.3):
+ *   Build & Docker Push → Unit Tests → Integration Tests →
+ *   Deploy to Master (Rolling Update) → E2E Full Suite →
+ *   Locust Performance (advisory, AR-9) → Generate Release Notes
+ *
+ * FR-4: Master promotion gate — unit + integration must pass before deploy;
+ *       E2E full suite gates after deploy (hard gate via runE2ETests).
+ * NFR-2: Zero-downtime Rolling Update (values-master.yaml + Helm charts Story 4.1).
+ *
+ * Unlike Jenkinsfile.stage, this pipeline does NOT delete the Master namespace.
+ * Namespace circleguard-master is long-lived; Helm applies rolling upgrades only.
+ *
+ * Shared library: Global Pipeline Library `circleguard-shared-library` (jenkins/vars).
+ *
+ * Operator prerequisites (Jenkins admin):
+ *   - MASTER_BASE_URL — gateway base URL reachable from the Jenkins agent
+ *     (same role as STAGE_BASE_URL for Stage); required for E2E; Locust uses it as URL hint.
+ *   - git-cliff on agent PATH or GIT_CLIFF_BIN (release notes — Story 4.2).
+ *   - kubectl, helm configured for the production cluster namespace circleguard-master.
+ *   - At least one Git tag for git-cliff scope; see README / generateReleaseNotes.groovy.
+ */
+@Library('circleguard-shared-library') _
+
+pipeline {
+    agent any
+
+    environment {
+        MASTER_NAMESPACE = 'circleguard-master'
+        ENV_LABEL        = 'master'
+    }
+
+    stages {
+        stage('Build & Docker Push') {
+            steps {
+                script {
+                    def gitSha = buildAndPush('circleguard-gateway-service')
+                    buildAndPush('circleguard-auth-service')
+                    buildAndPush('circleguard-identity-service')
+                    buildAndPush('circleguard-form-service')
+                    buildAndPush('circleguard-promotion-service')
+                    buildAndPush('circleguard-notification-service')
+                    env.GIT_SHA = gitSha
+                }
+            }
+        }
+
+        stage('Unit Tests') {
+            steps {
+                script {
+                    runUnitTests('circleguard-gateway-service')
+                    runUnitTests('circleguard-auth-service')
+                    runUnitTests('circleguard-identity-service')
+                    runUnitTests('circleguard-form-service')
+                    runUnitTests('circleguard-promotion-service')
+                    runUnitTests('circleguard-notification-service')
+                }
+            }
+        }
+
+        stage('Integration Tests') {
+            steps {
+                script {
+                    runIntegrationTests('circleguard-gateway-service')
+                    runIntegrationTests('circleguard-auth-service')
+                    runIntegrationTests('circleguard-identity-service')
+                    runIntegrationTests('circleguard-form-service')
+                    runIntegrationTests('circleguard-promotion-service')
+                    runIntegrationTests('circleguard-notification-service')
+                }
+            }
+        }
+
+        stage('Deploy to Master (Rolling Update)') {
+            steps {
+                script {
+                    deployToNamespace('circleguard-gateway-service',      env.ENV_LABEL, env.MASTER_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-auth-service',         env.ENV_LABEL, env.MASTER_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-identity-service',     env.ENV_LABEL, env.MASTER_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-form-service',         env.ENV_LABEL, env.MASTER_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-promotion-service',    env.ENV_LABEL, env.MASTER_NAMESPACE, env.GIT_SHA)
+                    deployToNamespace('circleguard-notification-service', env.ENV_LABEL, env.MASTER_NAMESPACE, env.GIT_SHA)
+                }
+                sh '''
+                    set -e
+                    NS=circleguard-master
+                    for rel in \
+                        circleguard-gateway-service-master \
+                        circleguard-auth-service-master \
+                        circleguard-identity-service-master \
+                        circleguard-form-service-master \
+                        circleguard-promotion-service-master \
+                        circleguard-notification-service-master
+                    do
+                        kubectl rollout status "deployment/${rel}" -n "${NS}" --timeout=5m
+                    done
+                '''
+            }
+        }
+
+        stage('E2E Full Suite') {
+            steps {
+                script {
+                    def masterUrl = env.MASTER_BASE_URL?.trim()
+                    if (!masterUrl) {
+                        error('MASTER_BASE_URL must be set for E2E against Master (Jenkins global or job environment).')
+                    }
+                    runE2ETests(masterUrl)
+                }
+            }
+        }
+
+        stage('Locust Performance') {
+            steps {
+                script {
+                    def masterUrl = env.MASTER_BASE_URL?.trim() ?: ''
+                    runLocust(masterUrl)
+                }
+            }
+        }
+
+        stage('Generate Release Notes') {
+            steps {
+                script {
+                    generateReleaseNotes()
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            junit allowEmptyResults: true,
+                  testResults: '**/build/test-results/test/**/*.xml',
+                  checksName: 'Unit (aggregate)'
+            junit allowEmptyResults: true,
+                  testResults: '**/build/test-results/integrationTest/**/*.xml',
+                  checksName: 'Integration (aggregate)'
+            archiveArtifacts allowEmptyArchive: true,
+                             artifacts: 'services/*/build/reports/tests/**/*'
+            echo "=== Jenkinsfile.master pipeline complete — result: ${currentBuild.result ?: 'SUCCESS'} ==="
+        }
+    }
+}
